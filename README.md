@@ -1,105 +1,109 @@
 # GestureChord
 
-**Hand-gesture-to-MIDI chord controller for FL Studio.**
+**A two-hand gesture-to-MIDI chord controller for FL Studio.**
 
-Turn your webcam into a harmonic performance instrument. Hold up fingers to play
-diatonic chords in any key — think in Roman numerals (I, ii, iii, IV, V), perform
-with your hands.
+Use your webcam as a musical instrument. Your right hand selects chords by holding up fingers, your left hand modifies chord quality and controls effects in real time.
 
 ---
 
-## Status: Phase 1 — Vision Pipeline
+## Features
 
-Phase 1 proves the core vision pipeline: webcam capture → hand tracking → finger
-counting → visual overlay. No MIDI output yet — this phase validates that gesture
-detection is fast and reliable enough to build a musical instrument on top of.
+### Right Hand — Chord Selection
+| Fingers | Chord |
+|---------|-------|
+| 1 | I (tonic) |
+| 2 | ii |
+| 3 | iii |
+| 4 | IV |
+| 5 | V |
+| Fist | Silence |
+
+### Left Hand — Chord Modifiers
+| Fingers | Modifier | Example (Key of C, Right=1) |
+|---------|----------|----------------------------|
+| 0 / absent | Basic triad | C major (C E G) |
+| 1 | Add 7th | Cmaj7 (C E G B) |
+| 2 | Suspended 4th | Csus4 (C F G) |
+| 3 | Power chord | C5 (C G) |
+| 4 | vi chord | Am (A C E) |
+| 5 | Octave up | C major +12 |
+
+### Left Hand — Expression Control
+Your left hand's height in the frame sends continuous MIDI CC data:
+- **Hand high** = CC 127 (maximum)
+- **Hand low** = CC 0 (minimum)
+- Smoothed to eliminate jitter
+- Map to any FL Studio parameter (filter, reverb, delay, etc.)
+
+### Other Features
+- Performance zone — hand must be in upper 75% of frame to trigger
+- Settle-then-confirm debouncing — prevents cascade triggers (1→2→3)
+- Fist = instant silence (no confirmation delay)
+- Smart left/right hand identification using position + labels
+- Independent gesture filters per hand
+- Visual overlay with chord display, hand badges, modifier status, CC bar
 
 ---
 
-## Setup (Windows)
+## Setup
 
-### Prerequisites
-
-- Python 3.9 or newer (3.10+ recommended)
-- A webcam (built-in laptop camera works fine)
-- pip (comes with Python)
+### Requirements
+- Python 3.9+
+- Webcam
+- Windows (tested), macOS/Linux (should work)
+- FL Studio (or any DAW that accepts MIDI input)
 
 ### Installation
-
 ```bash
-# Clone or download this project, then:
 cd gesturechord
-
-# Create a virtual environment (recommended)
 python -m venv venv
-venv\Scripts\activate
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # macOS/Linux
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Running Phase 1
+### MIDI Routing (Windows)
+1. Install **loopBe1**: https://www.nerds.de/en/loopbe1.html
+   (or loopMIDI: https://www.tobias-erichsen.de/software/loopmidi.html)
+2. Reboot after installation
+3. In FL Studio: **Options → MIDI Settings** → enable the loopBe/loopMIDI port in Input
+4. Load any synth plugin (FL Keys for testing)
 
+### Running
 ```bash
 python main.py
 ```
 
-A window will open showing your webcam feed with hand tracking overlay.
-
-### Controls
-
-| Key   | Action                              |
-|-------|-------------------------------------|
-| ESC/Q | Quit                                |
-| D     | Toggle debug overlay (finger ratios)|
-| R     | Reset gesture filters               |
+The model file (`hand_landmarker.task`, ~12 MB) downloads automatically on first run.
 
 ---
 
-## What You Should See
+## Keyboard Controls
 
-1. **Hand skeleton** drawn over your hand in cyan
-2. **Fingertip dots**: green = extended, red = curled
-3. **Finger count** (large number, top-left) — this is the filtered count
-4. **Stability bar** — green when detection is stable
-5. **Debug panel** (bottom-left) — per-finger extension ratios with mini bar charts
-6. **FPS and inference time** (bottom-right)
+| Key | Action |
+|-----|--------|
+| ESC / Q | Quit |
+| SPACE | Panic — stop all MIDI notes |
+| K | Cycle key root (C → C# → D → ...) |
+| M | Toggle major / natural minor |
+| UP / DOWN | Octave up / down |
+| D | Toggle debug overlay |
+| E | Toggle expression CC on/off |
+| T | Send test note (verify MIDI routing) |
+| R | Full reset (filters + state + MIDI) |
 
 ---
 
-## Phase 1 Testing Guide
+## Linking Expression to FL Studio Effects
 
-Test these scenarios and note any problems:
+1. Run GestureChord and raise your left hand in the frame
+2. In FL Studio, right-click any knob or slider in a plugin
+3. Select **"Link to controller..."**
+4. Move your left hand up and down — FL Studio auto-detects the CC
+5. Click **"Accept"**
 
-### Basic Detection
-- [ ] Hold up 1 finger (index) — does it show 1?
-- [ ] Hold up 2 fingers (index + middle) — does it show 2?
-- [ ] Hold up 3, 4, 5 fingers — correct counts?
-- [ ] Make a fist — does it show 0?
-- [ ] Thumb only — does it show 1? (thumb is hardest to detect)
-
-### Stability
-- [ ] Hold a gesture steady for 3 seconds — does the count stay stable?
-- [ ] Transition between gestures — how quickly does the count update?
-- [ ] Is there flickering when you hold a borderline gesture?
-
-### Robustness
-- [ ] Move your hand slowly across the frame — does tracking follow?
-- [ ] Move your hand quickly — does it lose tracking? How fast does it recover?
-- [ ] Try different distances from camera (near, mid, far)
-- [ ] Try different lighting (bright, dim, backlit)
-- [ ] Try with background clutter behind your hand
-
-### Performance
-- [ ] What FPS are you getting? (should be 25+ for usable latency)
-- [ ] What inference time? (should be under 30ms)
-- [ ] Is there visible lag between your hand movement and the overlay?
-
-### Edge Cases
-- [ ] What happens when you remove your hand from frame?
-- [ ] What happens when you put it back?
-- [ ] What happens with two hands? (should track the right hand)
-- [ ] What happens if you cover part of your hand with the other?
+Now that parameter follows your hand height. Works with any plugin parameter: filter cutoff, reverb wet, delay feedback, volume, etc.
 
 ---
 
@@ -107,75 +111,52 @@ Test these scenarios and note any problems:
 
 ```
 gesturechord/
-├── main.py                     # Entry point, main loop
-├── config.yaml                 # (Phase 5) All configurable parameters
-├── requirements.txt
-├── README.md
-│
+├── main.py                      # Main loop, two-hand pipeline
 ├── vision/
-│   ├── camera.py               # Webcam capture, FPS measurement
-│   ├── hand_tracker.py         # MediaPipe wrapper → HandData
-│   └── gesture_recognizer.py   # Landmark analysis → GestureResult
-│
-├── engine/                     # (Phase 2-3) State machine, music theory
-│   ├── state_machine.py
-│   ├── music_theory.py
-│   └── chord_mapper.py
-│
-├── midi/                       # (Phase 4) MIDI output to FL Studio
-│   └── midi_output.py
-│
+│   ├── camera.py                # Webcam capture
+│   ├── hand_tracker.py          # MediaPipe HandLandmarker (2-hand)
+│   └── gesture_recognizer.py    # Y-position finger detection
+├── engine/
+│   ├── state_machine.py         # Settle-then-confirm debouncing
+│   ├── music_theory.py          # Scales, chords, intervals
+│   ├── chord_mapper.py          # Right degree + left modifier → chord
+│   └── expression.py            # Hand Y → smoothed MIDI CC
+├── midi/
+│   └── midi_output.py           # MIDI notes + CC output
 ├── ui/
-│   └── overlay.py              # OpenCV visual feedback
-│
+│   └── overlay.py               # Visual feedback overlay
 └── utils/
-    ├── filters.py              # Hysteresis, rolling mode filters
-    └── logger.py               # Structured logging
+    ├── filters.py               # Hysteresis, rolling mode, EMA
+    └── logger.py                # Structured logging
 ```
 
-**Key design principle:** Each module has a single responsibility and clean
-interfaces. Vision knows nothing about music. Engine knows nothing about cameras.
-MIDI knows nothing about gestures. You can swap any component independently.
-
----
-
-## Roadmap
-
-| Phase | Focus                    | Status  |
-|-------|--------------------------|---------|
-| 1     | Vision pipeline          | ← HERE  |
-| 2     | State machine + debounce | Next    |
-| 3     | Music theory engine      | —       |
-| 4     | MIDI output + FL Studio  | —       |
-| 5     | Config + polish          | —       |
-| 6     | Expressive controls      | —       |
+Each module has a single responsibility. Vision knows nothing about music. Engine knows nothing about cameras. MIDI knows nothing about gestures.
 
 ---
 
 ## Troubleshooting
 
-**"Could not download hand landmarker model":**
-- The system auto-downloads a ~12 MB model file on first run
-- If download fails (firewall, proxy, etc.), download manually from:
-  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
-- Place the file `hand_landmarker.task` in your project directory (same folder as `main.py`)
+**No MIDI sound:**
+- Press T to send a test note — if you hear it, MIDI routing works
+- Check FL Studio MIDI Settings → Input → loopBe must be enabled
+- Make sure a synth plugin is loaded on a channel
 
-**Camera won't open:**
-- Check that no other app is using your webcam (Zoom, Discord, OBS, etc.)
-- Try changing `CAMERA_INDEX` in `main.py` to 1 or 2 if you have multiple cameras
+**Finger detection wrong:**
+- Press D to see per-finger ratios in the debug panel
+- Ensure palm faces the camera
+- Improve lighting
 
-**Low FPS (<20):**
-- Close other heavy applications
-- Ensure your laptop is plugged in (battery mode may throttle CPU)
+**Chords cascade (1→2→3 when going to 3):**
+- The settle-then-confirm system handles this — increase SETTLE_FRAMES in main.py if needed
 
-**Finger count is wrong:**
-- Press D to see per-finger extension ratios
-- Check if the problematic finger's ratio is hovering near the threshold
-- Try adjusting `HYSTERESIS_HIGH` and `HYSTERESIS_LOW` in `main.py`
-- Ensure your palm faces the camera, not sideways
+**Expression CC jittery:**
+- Lower EXPRESSION_SMOOTHING (e.g., 0.15) for more smoothing
+- Increase EXPRESSION_DEAD_ZONE (e.g., 3.0) for less CC spam
 
-**Tracking keeps dropping:**
-- Improve lighting (face a window or desk lamp)
-- Reduce background clutter
-- Keep your hand within the center 80% of the frame
-- Try lowering `DETECTION_CONFIDENCE` to 0.5
+**FPS too low:**
+- Close other apps
+- Lower DETECTION_CONFIDENCE to 0.5
+
+**Hands misidentified (left/right swapped):**
+- Keep hands on their respective sides of the frame
+- The system uses X-position as a tiebreaker when labels conflict

@@ -1,18 +1,20 @@
 """
-GestureChord v2 Phase 2 — Two-hand chord performance.
+GestureChord v2 Phase 3 — Two-hand performance with expression control.
 
-Right hand: finger count → scale degree (1-5)
-Left hand: finger count → chord modifier
-    0/absent = basic triad
-    1 = add 7th
-    2 = sus4
-    3 = power chord
-    4 = vi chord
-    5 = octave up
+Right hand: finger count -> scale degree (1-5)
+Left hand:
+    Finger count -> chord modifier (7th, sus4, power, vi, +oct)
+    Y position -> MIDI CC for continuous effects control
+
+CC Expression:
+    Hand high = CC 127 (max effect)
+    Hand low = CC 0 (min effect)
+    Map to any FL Studio parameter via "Link to controller"
 
 Controls:
     ESC/Q=Quit  D=Debug  R=Reset  SPACE=Panic
     K=Key  M=Major/Minor  UP/DOWN=Octave  T=Test
+    E=Toggle expression CC on/off
 """
 
 import sys
@@ -27,6 +29,7 @@ from vision.gesture_recognizer import GestureRecognizer, GestureResult
 from engine.state_machine import GestureStateMachine, EventType, State
 from engine.music_theory import MusicTheoryEngine, ChordInfo
 from engine.chord_mapper import ChordMapper, Modifier, MODIFIER_NAMES
+from engine.expression import ExpressionController
 from midi.midi_output import MidiOutput
 from ui.overlay import Overlay
 from utils.logger import setup_logger
@@ -51,12 +54,19 @@ CHANGE_FRAMES = 4
 SETTLE_FRAMES = 3
 RELEASE_GRACE_MS = 250
 
-MODIFIER_SETTLE_FRAMES = 4  # Left hand modifier debounce
+MODIFIER_SETTLE_FRAMES = 4
 
 DEFAULT_KEY = "C"
 DEFAULT_SCALE = "major"
 DEFAULT_OCTAVE = 4
 DEFAULT_VELOCITY = 100
+
+# Expression CC
+EXPRESSION_CC = 1            # CC 1 = Mod Wheel (most widely supported)
+EXPRESSION_ZONE_TOP = 0.15   # Hand at top of frame = CC 127
+EXPRESSION_ZONE_BOTTOM = 0.65  # Hand near zone line = CC 0
+EXPRESSION_SMOOTHING = 0.25  # EMA alpha (lower = smoother)
+EXPRESSION_DEAD_ZONE = 2.0   # Min CC change before sending
 
 MIDI_PORT_NAME = "GestureChord"
 MIDI_CHANNEL = 0
@@ -69,7 +79,7 @@ HAND_LOST_RESET_FRAMES = 15
 def main():
     logger = setup_logger(name="gesturechord", level=logging.INFO)
     logger.info("=" * 60)
-    logger.info("GestureChord v2 — Two-Hand Chord Performance")
+    logger.info("GestureChord v2 — Two-Hand Performance + Expression")
     logger.info("=" * 60)
 
     # ── Components ──
@@ -100,6 +110,14 @@ def main():
     chord_mapper = ChordMapper(
         music_engine=music_engine, settle_frames=MODIFIER_SETTLE_FRAMES)
 
+    expression = ExpressionController(
+        cc_number=EXPRESSION_CC,
+        zone_top=EXPRESSION_ZONE_TOP,
+        zone_bottom=EXPRESSION_ZONE_BOTTOM,
+        smoothing_alpha=EXPRESSION_SMOOTHING,
+        dead_zone=EXPRESSION_DEAD_ZONE,
+        enabled=True)
+
     midi_out = MidiOutput(port_name=MIDI_PORT_NAME, channel=MIDI_CHANNEL)
     overlay = Overlay(show_debug_info=True)
 
@@ -126,9 +144,10 @@ def main():
 
     logger.info(f"Key: {music_engine.key_display} | Octave: {music_engine.octave}")
     logger.info("Right hand: 1-5 fingers = I-V chord")
-    logger.info("Left hand modifiers:")
-    logger.info("  0/absent = triad | 1 = 7th | 2 = sus4 | 3 = power | 4 = vi | 5 = +octave")
-    logger.info("Controls: ESC=Quit SPACE=Panic K=Key M=Mode D=Debug T=Test R=Reset")
+    logger.info("Left hand: fingers=modifier, height=CC expression")
+    logger.info("  Modifiers: 0=triad 1=7th 2=sus4 3=power 4=vi 5=+oct")
+    logger.info(f"  Expression: CC{EXPRESSION_CC} (hand height)")
+    logger.info("Controls: ESC=Quit SPACE=Panic K=Key M=Mode D=Debug T=Test R=Reset E=Expression")
     _print_chord_map(logger, music_engine)
 
     # ===================================================================
@@ -161,16 +180,18 @@ def main():
                     right_recognizer.reset()
                     right_filters_reset = True
 
-            # ── Left hand (modifier) ──
+            # ── Left hand (modifier + expression) ──
             left_gesture = None
             left_finger_count = None
             left_in_zone = False
+            left_hand_y = None
 
             left_hand = tracking.get_left_hand()
             if left_hand is not None and left_hand.wrist.y < PERFORMANCE_ZONE_THRESHOLD:
                 left_in_zone = True
                 left_gesture = left_recognizer.recognize(left_hand)
                 left_finger_count = left_gesture.finger_count
+                left_hand_y = left_hand.wrist.y  # For expression CC
                 left_frames_lost = 0
                 left_filters_reset = False
             else:
@@ -179,10 +200,14 @@ def main():
                     left_recognizer.reset()
                     left_filters_reset = True
 
-            # ── Update modifier from left hand ──
+            # ── Update modifier ──
             modifier_changed = chord_mapper.update_modifier(
-                left_finger_count if left_in_zone else None
-            )
+                left_finger_count if left_in_zone else None)
+
+            # ── Update expression CC ──
+            cc_value = expression.update(left_hand_y if left_in_zone else None)
+            if cc_value is not None and midi_available:
+                midi_out.send_cc(expression.cc_number, cc_value)
 
             # ── State machine (right hand) ──
             event = state_machine.update(right_finger_count, right_is_stable)
@@ -198,9 +223,7 @@ def main():
                                             mapped.chord_info.velocity)
                     current_mapped_chord = mapped
                     chord_triggered = True
-                    mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
-                    logger.info(f"CHORD ON: {mapped.display_name}{mod_str} "
-                                f"[{' '.join(mapped.chord_info.note_names)}]")
+                    _log_chord(logger, "ON", mapped)
 
             elif event.event_type == EventType.CHORD_CHANGE:
                 mapped = chord_mapper.get_chord(event.finger_count)
@@ -210,9 +233,7 @@ def main():
                                               mapped.chord_info.velocity)
                     current_mapped_chord = mapped
                     chord_triggered = True
-                    mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
-                    logger.info(f"CHANGE: {mapped.display_name}{mod_str} "
-                                f"[{' '.join(mapped.chord_info.note_names)}]")
+                    _log_chord(logger, "CHANGE", mapped)
 
             elif event.event_type == EventType.CHORD_OFF:
                 if midi_available:
@@ -220,7 +241,7 @@ def main():
                 current_mapped_chord = None
                 logger.info("CHORD OFF")
 
-            # ── Re-trigger on modifier change while chord is sustained ──
+            # ── Re-trigger on modifier change ──
             if modifier_changed and not chord_triggered and state_machine.is_playing:
                 mapped = chord_mapper.get_chord(state_machine.active_finger_count)
                 if mapped:
@@ -228,15 +249,12 @@ def main():
                         midi_out.change_chord(mapped.chord_info.midi_notes,
                                               mapped.chord_info.velocity)
                     current_mapped_chord = mapped
-                    mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
-                    logger.info(f"MODIFIER: {mapped.display_name}{mod_str} "
-                                f"[{' '.join(mapped.chord_info.note_names)}]")
+                    _log_chord(logger, "MODIFIER", mapped)
 
-            # ── Build overlay ──
+            # ── Overlay ──
             chord_display = _build_chord_display(
                 event, current_mapped_chord, music_engine,
-                right_finger_count, chord_mapper,
-            )
+                right_finger_count, chord_mapper)
 
             status_parts = []
             if not midi_available:
@@ -245,8 +263,7 @@ def main():
             frame = overlay.draw(
                 frame=frame, tracking=tracking, gesture=right_gesture,
                 fps=camera.fps, status_text="  |  ".join(status_parts),
-                chord_display=chord_display,
-            )
+                chord_display=chord_display)
 
             h_frame, w_frame = frame.shape[:2]
 
@@ -262,6 +279,9 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, mod_color, 1, cv2.LINE_AA)
             cv2.rectangle(frame, (w_frame - 140, 120), (w_frame - 10, 150), (80, 80, 80), 1)
 
+            # Expression CC bar
+            _draw_cc_bar(frame, expression, w_frame - 140, 155)
+
             # Zone line
             zone_y = int(h_frame * PERFORMANCE_ZONE_THRESHOLD)
             any_in_zone = right_in_zone or left_in_zone
@@ -276,7 +296,7 @@ def main():
             if key == 27 or key == ord("q"):
                 break
             _handle_keyboard(key, logger, right_recognizer, left_recognizer,
-                             state_machine, music_engine, chord_mapper,
+                             state_machine, music_engine, chord_mapper, expression,
                              midi_out, midi_available, overlay)
 
     except KeyboardInterrupt:
@@ -288,6 +308,8 @@ def main():
         camera.release()
         cv2.destroyAllWindows()
 
+
+# ── Drawing helpers ──
 
 def _draw_hand_badge(frame, label, gesture, in_zone, x, y):
     w, h = 130, 50
@@ -305,6 +327,57 @@ def _draw_hand_badge(frame, label, gesture, in_zone, x, y):
     cv2.rectangle(frame, (x, y), (x + w, y + h), (80, 80, 80), 1)
 
 
+def _draw_cc_bar(frame, expr, x, y):
+    """Draw vertical CC expression bar with value."""
+    bar_w, bar_h = 130, 80
+    cv2.rectangle(frame, (x, y), (x + bar_w, y + bar_h), (30, 30, 30), -1)
+
+    # Label
+    enabled_str = "ON" if expr.enabled else "OFF"
+    label_color = (0, 200, 200) if expr.enabled else (100, 100, 100)
+    cv2.putText(frame, f"CC{expr.cc_number} {enabled_str}", (x + 5, y + 14),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, label_color, 1, cv2.LINE_AA)
+
+    # Value text
+    cv2.putText(frame, str(expr.cc_value), (x + 85, y + 14),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
+
+    # Horizontal fill bar
+    inner_x = x + 5
+    inner_y = y + 22
+    inner_w = bar_w - 10
+    inner_h = 16
+    fill_w = int(inner_w * expr.cc_normalized)
+
+    cv2.rectangle(frame, (inner_x, inner_y),
+                  (inner_x + inner_w, inner_y + inner_h), (50, 50, 50), -1)
+    if fill_w > 0:
+        # Gradient: blue (low) to cyan (high)
+        b = int(200 * (1.0 - expr.cc_normalized))
+        g = int(200 * expr.cc_normalized)
+        bar_color = (200, g + 55, b)
+        cv2.rectangle(frame, (inner_x, inner_y),
+                      (inner_x + fill_w, inner_y + inner_h), bar_color, -1)
+    cv2.rectangle(frame, (inner_x, inner_y),
+                  (inner_x + inner_w, inner_y + inner_h), (80, 80, 80), 1)
+
+    # Tip text
+    cv2.putText(frame, "Hand height = effect", (x + 5, y + 52),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1, cv2.LINE_AA)
+    cv2.putText(frame, "Link in FL: knob > Link", (x + 5, y + 66),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1, cv2.LINE_AA)
+
+    cv2.rectangle(frame, (x, y), (x + bar_w, y + bar_h), (80, 80, 80), 1)
+
+
+# ── Logic helpers ──
+
+def _log_chord(logger, action, mapped):
+    mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
+    notes = " ".join(mapped.chord_info.note_names)
+    logger.info(f"{action}: {mapped.display_name}{mod_str} [{notes}]")
+
+
 def _build_chord_display(event, mapped_chord, engine, right_count, mapper):
     state_name = event.state.name
     mod_name = mapper.active_modifier_name
@@ -312,8 +385,6 @@ def _build_chord_display(event, mapped_chord, engine, right_count, mapper):
     if mapped_chord is not None:
         ci = mapped_chord.chord_info
         name = mapped_chord.display_name
-        if mod_name:
-            name += f"  [{mod_name}]"
         return {
             "chord_name": name,
             "roman": ci.roman_numeral,
@@ -343,18 +414,20 @@ def _build_chord_display(event, mapped_chord, engine, right_count, mapper):
     }
 
 
-def _handle_keyboard(key, logger, r_rec, l_rec, sm, me, cm, midi, midi_ok, ov):
+def _handle_keyboard(key, logger, r_rec, l_rec, sm, me, cm, expr, midi, midi_ok, ov):
     if key == ord(" "):
-        sm.reset()
-        cm.reset()
+        sm.reset(); cm.reset(); expr.reset()
         if midi_ok: midi.panic()
         logger.info("PANIC")
     elif key == ord("r"):
-        r_rec.reset(); l_rec.reset(); sm.reset(); cm.reset()
+        r_rec.reset(); l_rec.reset(); sm.reset(); cm.reset(); expr.reset()
         if midi_ok: midi.panic()
         logger.info("Full reset")
     elif key == ord("d"):
         ov.show_debug_info = not ov.show_debug_info
+    elif key == ord("e"):
+        expr.enabled = not expr.enabled
+        logger.info(f"Expression CC: {'ON' if expr.enabled else 'OFF'}")
     elif key == ord("k"):
         sm.reset(); cm.reset()
         if midi_ok: midi.stop_chord()
@@ -370,12 +443,12 @@ def _handle_keyboard(key, logger, r_rec, l_rec, sm, me, cm, midi, midi_ok, ov):
         _print_chord_map(logger, me)
     elif key == ord("t"):
         if midi_ok: midi.send_test_note()
-    elif key in (82, 0):  # UP
+    elif key in (82, 0):
         sm.reset()
         if midi_ok: midi.stop_chord()
         me.set_octave(me.octave + 1)
         logger.info(f"Octave: {me.octave}")
-    elif key in (84, 1):  # DOWN
+    elif key in (84, 1):
         sm.reset()
         if midi_ok: midi.stop_chord()
         me.set_octave(me.octave - 1)

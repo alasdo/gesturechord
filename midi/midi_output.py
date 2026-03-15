@@ -222,6 +222,27 @@ class MidiOutput:
         """
         self.play_chord(new_notes, velocity)
 
+    def send_cc(self, control: int, value: int) -> None:
+        """
+        Send a MIDI Control Change message.
+
+        Use this for continuous expression control (filter cutoff, reverb, etc.)
+        In FL Studio, link any plugin parameter to a CC using "Link to controller."
+
+        Args:
+            control: CC number (0-127). Common ones:
+                1 = Mod Wheel, 7 = Volume, 10 = Pan, 11 = Expression,
+                74 = Brightness/Cutoff
+            value: CC value (0-127).
+        """
+        if not self._is_open:
+            return
+
+        control = max(0, min(127, control))
+        value = max(0, min(127, value))
+        msg = mido.Message("control_change", control=control, value=value, channel=self.channel)
+        self._port.send(msg)
+
     def panic(self) -> None:
         """
         Emergency: stop ALL notes on ALL channels.

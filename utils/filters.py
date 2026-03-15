@@ -166,3 +166,66 @@ class RollingModeFilter:
         """Clear buffer and reset state."""
         self._buffer.clear()
         self._last_value = None
+
+
+class ExponentialMovingAverage:
+    """
+    Smooths a continuous signal using exponential moving average.
+
+    EMA formula: output = alpha * new_value + (1 - alpha) * previous_output
+
+    Used for smoothing continuous gesture data (hand Y position → CC value)
+    to eliminate frame-to-frame jitter while allowing intentional movement.
+
+    Args:
+        alpha: Smoothing factor 0.0-1.0. Higher = less smoothing (more responsive).
+            0.1 = very smooth (laggy), 0.3 = moderate, 0.5 = light smoothing.
+        dead_zone: Minimum change in output before reporting a new value.
+            Prevents micro-jitter from producing MIDI CC spam.
+    """
+
+    def __init__(self, alpha: float = 0.3, dead_zone: float = 1.5):
+        self.alpha = alpha
+        self.dead_zone = dead_zone
+        self._value: Optional[float] = None
+        self._last_reported: Optional[float] = None
+
+    @property
+    def value(self) -> Optional[float]:
+        """Current smoothed value."""
+        return self._value
+
+    def update(self, raw_value: float) -> Optional[float]:
+        """
+        Feed a new raw value and get smoothed output.
+
+        Args:
+            raw_value: New raw continuous value.
+
+        Returns:
+            Smoothed value if it changed beyond the dead zone, None otherwise.
+            This lets you skip sending MIDI when nothing meaningful changed.
+        """
+        if self._value is None:
+            self._value = raw_value
+            self._last_reported = raw_value
+            return raw_value
+
+        # Apply EMA
+        self._value = self.alpha * raw_value + (1.0 - self.alpha) * self._value
+
+        # Dead zone: only report if change exceeds threshold
+        if self._last_reported is None:
+            self._last_reported = self._value
+            return self._value
+
+        if abs(self._value - self._last_reported) >= self.dead_zone:
+            self._last_reported = self._value
+            return self._value
+
+        return None  # No meaningful change
+
+    def reset(self) -> None:
+        """Reset to uninitialized state."""
+        self._value = None
+        self._last_reported = None
