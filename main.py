@@ -145,7 +145,8 @@ def main():
     logger.info(f"Key: {music_engine.key_display} | Octave: {music_engine.octave}")
     logger.info("Right hand: 1-5 fingers = I-V chord")
     logger.info("Left hand: fingers=modifier, height=CC expression")
-    logger.info("  Modifiers: 0=triad 1=7th 2=sus4 3=power 4=vi 5=+oct")
+    logger.info("  Modifiers: 0=triad 1=7th 2=sus4 3=9th 4=vi 5=vii")
+    logger.info("  Right thumb up = first inversion")
     logger.info(f"  Expression: CC{EXPRESSION_CC} (hand height)")
     logger.info("Controls: ESC=Quit SPACE=Panic K=Key M=Mode D=Debug T=Test R=Reset E=Expression")
     _print_chord_map(logger, music_engine)
@@ -212,11 +213,16 @@ def main():
             # ── State machine (right hand) ──
             event = state_machine.update(right_finger_count, right_is_stable)
 
+            # ── Right hand thumb = inversion toggle ──
+            right_thumb = False
+            if right_gesture is not None and right_in_zone:
+                right_thumb = right_gesture.finger_states[0]  # thumb is index 0
+
             # ── Handle chord events ──
             chord_triggered = False
 
             if event.event_type == EventType.CHORD_ON:
-                mapped = chord_mapper.get_chord(event.finger_count)
+                mapped = chord_mapper.get_chord(event.finger_count, right_thumb)
                 if mapped:
                     if midi_available:
                         midi_out.play_chord(mapped.chord_info.midi_notes,
@@ -226,7 +232,7 @@ def main():
                     _log_chord(logger, "ON", mapped)
 
             elif event.event_type == EventType.CHORD_CHANGE:
-                mapped = chord_mapper.get_chord(event.finger_count)
+                mapped = chord_mapper.get_chord(event.finger_count, right_thumb)
                 if mapped:
                     if midi_available:
                         midi_out.change_chord(mapped.chord_info.midi_notes,
@@ -243,7 +249,7 @@ def main():
 
             # ── Re-trigger on modifier change ──
             if modifier_changed and not chord_triggered and state_machine.is_playing:
-                mapped = chord_mapper.get_chord(state_machine.active_finger_count)
+                mapped = chord_mapper.get_chord(state_machine.active_finger_count, right_thumb)
                 if mapped:
                     if midi_available:
                         midi_out.change_chord(mapped.chord_info.midi_notes,
@@ -279,8 +285,16 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, mod_color, 1, cv2.LINE_AA)
             cv2.rectangle(frame, (w_frame - 140, 120), (w_frame - 10, 150), (80, 80, 80), 1)
 
+            # Inversion indicator
+            inv_color = (0, 200, 200) if right_thumb else (80, 80, 80)
+            inv_text = "INV: 1st" if right_thumb else "INV: root"
+            cv2.rectangle(frame, (w_frame - 140, 152), (w_frame - 10, 172), (30, 30, 30), -1)
+            cv2.putText(frame, inv_text, (w_frame - 135, 167),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, inv_color, 1, cv2.LINE_AA)
+            cv2.rectangle(frame, (w_frame - 140, 152), (w_frame - 10, 172), (80, 80, 80), 1)
+
             # Expression CC bar
-            _draw_cc_bar(frame, expression, w_frame - 140, 155)
+            _draw_cc_bar(frame, expression, w_frame - 140, 177)
 
             # Zone line
             zone_y = int(h_frame * PERFORMANCE_ZONE_THRESHOLD)

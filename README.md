@@ -24,9 +24,17 @@ Use your webcam as a musical instrument. Your right hand selects chords by holdi
 | 0 / absent | Basic triad | C major (C E G) |
 | 1 | Add 7th | Cmaj7 (C E G B) |
 | 2 | Suspended 4th | Csus4 (C F G) |
-| 3 | Power chord | C5 (C G) |
+| 3 | 9th chord | Cmaj9 (C E G B D) |
 | 4 | vi chord | Am (A C E) |
-| 5 | Octave up | C major +12 |
+| 5 | vii° chord | Bdim (B D F) |
+
+### Right Hand — Inversions
+| Thumb | Voicing |
+|-------|---------|
+| Tucked (down) | Root position — C E G |
+| Extended (up) | 1st inversion — E G C |
+
+The thumb is independent of finger counting (1-5 uses index through pinky), so you can combine any chord with any inversion.
 
 ### Left Hand — Expression Control
 Your left hand's height in the frame sends continuous MIDI CC data:

@@ -1,27 +1,36 @@
 """
-Chord mapper — combines right hand (degree) + left hand (modifier) into chords.
+Chord mapper v2 — expanded harmony with inversions.
 
-This module sits between gesture recognition and MIDI output. It takes:
-    - Right hand finger count → scale degree (1-5)
-    - Left hand finger count → chord modifier
-
-And produces the final chord to play.
-
-Left hand modifier mapping:
-    0 (fist/absent) = no modifier → basic diatonic triad
-    1 finger        = add 7th → seventh chord
-    2 fingers       = sus4 → replace 3rd with 4th
-    3 fingers       = power chord → root + 5th only
+Left hand modifier mapping (UPDATED):
+    0 (fist/absent) = basic diatonic triad
+    1 finger        = 7th chord (diatonic 7th)
+    2 fingers       = sus4 (replace 3rd with 4th)
+    3 fingers       = 9th chord (7th + 9th — rich extension)
     4 fingers       = vi chord (override degree to 6)
-    5 fingers       = octave up (+12 to all notes)
+    5 fingers       = vii° chord (override degree to 7)
 
-The modifier system has its own debouncing: the left hand modifier must be
-stable for a settle period before it takes effect. This prevents flickering
-between chord qualities during transitions.
+Right hand thumb = inversion toggle:
+    Thumb tucked (down) = root position
+    Thumb extended (up) = first inversion (lowest note moves up an octave)
 
-When the modifier changes while a chord is sustaining, the chord is
-re-triggered with the new quality. This is musically correct — if you're
-holding a C major and add the 7th, you want to hear Cmaj7 immediately.
+    This works because finger count uses index-through-pinky only in practice:
+    1 finger = index, 2 = index+middle, etc. The thumb is an independent
+    signal that doesn't conflict with finger counting.
+
+    For second inversion: hold left hand modifier + thumb extended.
+    (Future consideration — keeping it simple for now with one inversion level.)
+
+9th chord construction:
+    A 9th chord = triad + 7th + 9th (which is the 2nd scale degree up an octave).
+    For C major: C E G B D = Cmaj9
+    For D minor: D F A C E = Dm9
+    These are the lush chords used extensively in neo-soul, R&B, lo-fi, and jazz.
+
+Inversion mechanics:
+    Root position: C E G (root on bottom)
+    First inversion: E G C (move root up an octave)
+    The bass note changes, which changes the harmonic feel without changing
+    the chord identity. Inversions are essential for smooth voice leading.
 """
 
 import logging
@@ -29,7 +38,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 from enum import Enum, auto
 
-from engine.music_theory import MusicTheoryEngine, ChordInfo, ChordQuality, CHORD_INTERVALS, NOTE_NAMES
+from engine.music_theory import MusicTheoryEngine, ChordInfo, ChordQuality, NOTE_NAMES
 
 
 logger = logging.getLogger("gesturechord.engine.chord_mapper")
@@ -37,78 +46,67 @@ logger = logging.getLogger("gesturechord.engine.chord_mapper")
 
 class Modifier(Enum):
     """Left hand chord modifiers."""
-    NONE = auto()       # Basic diatonic triad
-    SEVENTH = auto()    # Add 7th
-    SUS4 = auto()       # Suspended 4th
-    POWER = auto()      # Root + 5th only
-    DEGREE_VI = auto()  # Override to degree 6
-    OCTAVE_UP = auto()  # +12 semitones
+    NONE = auto()        # Basic diatonic triad
+    SEVENTH = auto()     # Add 7th
+    SUS4 = auto()        # Suspended 4th
+    NINTH = auto()       # 9th chord (7th + 9th)
+    DEGREE_VI = auto()   # Override to degree 6
+    DEGREE_VII = auto()  # Override to degree 7 (diminished)
 
     @staticmethod
     def from_finger_count(count: Optional[int]) -> "Modifier":
-        """Map left hand finger count to modifier."""
         if count is None or count == 0:
             return Modifier.NONE
         mapping = {
             1: Modifier.SEVENTH,
             2: Modifier.SUS4,
-            3: Modifier.POWER,
+            3: Modifier.NINTH,
             4: Modifier.DEGREE_VI,
-            5: Modifier.OCTAVE_UP,
+            5: Modifier.DEGREE_VII,
         }
         return mapping.get(count, Modifier.NONE)
 
 
-# Display names for each modifier
 MODIFIER_NAMES = {
     Modifier.NONE: "",
     Modifier.SEVENTH: "7th",
     Modifier.SUS4: "sus4",
-    Modifier.POWER: "5 (power)",
+    Modifier.NINTH: "9th",
     Modifier.DEGREE_VI: "vi",
-    Modifier.OCTAVE_UP: "+oct",
+    Modifier.DEGREE_VII: "vii",
 }
 
 
 @dataclass
 class MappedChord:
-    """
-    Final chord ready for MIDI output, including modifier info.
-    Extends ChordInfo with modifier metadata for the UI.
-    """
-    chord_info: ChordInfo           # The actual chord (notes, name, etc.)
-    modifier: Modifier              # Active modifier
-    modifier_name: str              # Display name of modifier
-    display_name: str               # Full display: "Cmaj7" or "G5" etc.
+    """Final chord with modifier and inversion metadata."""
+    chord_info: ChordInfo
+    modifier: Modifier
+    modifier_name: str
+    display_name: str
+    inverted: bool = False
 
 
 class ChordMapper:
     """
-    Combines right hand degree + left hand modifier into final chords.
-
-    Also handles left hand modifier debouncing — the modifier must be
-    stable for `settle_frames` before taking effect.
+    Combines right hand (degree + thumb inversion) + left hand (modifier).
 
     Args:
-        music_engine: The music theory engine for chord generation.
-        settle_frames: How many frames the left hand count must be stable
-            before the modifier takes effect.
+        music_engine: Music theory engine for chord generation.
+        settle_frames: Frames for left hand modifier debounce.
     """
 
     def __init__(self, music_engine: MusicTheoryEngine, settle_frames: int = 4):
         self._engine = music_engine
         self._settle_frames = settle_frames
 
-        # Left hand modifier state
         self._active_modifier = Modifier.NONE
         self._pending_modifier = Modifier.NONE
         self._modifier_settle_counter = 0
-        self._last_left_count: Optional[int] = None
+        self._current_degree = 0
 
-        # Track what's currently playing for re-trigger on modifier change
-        self._current_degree: int = 0
-
-        logger.info(f"ChordMapper: settle_frames={settle_frames}")
+        logger.info(f"ChordMapper v2: settle={settle_frames}, "
+                    f"modifiers=[triad,7th,sus4,9th,vi,vii], inversions=thumb")
 
     @property
     def active_modifier(self) -> Modifier:
@@ -119,211 +117,228 @@ class ChordMapper:
         return MODIFIER_NAMES.get(self._active_modifier, "")
 
     def update_modifier(self, left_finger_count: Optional[int]) -> bool:
-        """
-        Update the left hand modifier state.
-
-        Args:
-            left_finger_count: Left hand finger count, or None if not detected.
-
-        Returns:
-            True if the modifier CHANGED this frame (chord should be re-triggered).
-        """
+        """Update left hand modifier. Returns True if modifier changed."""
         new_modifier = Modifier.from_finger_count(left_finger_count)
 
-        # If same as active, nothing to do
         if new_modifier == self._active_modifier:
             self._pending_modifier = new_modifier
             self._modifier_settle_counter = 0
             return False
 
-        # Different from active — check if it matches pending (settling)
         if new_modifier == self._pending_modifier:
             self._modifier_settle_counter += 1
             if self._modifier_settle_counter >= self._settle_frames:
                 old = self._active_modifier
                 self._active_modifier = new_modifier
                 self._modifier_settle_counter = 0
-                logger.info(
-                    f"Modifier changed: {MODIFIER_NAMES.get(old, '?')} -> "
-                    f"{MODIFIER_NAMES.get(new_modifier, '?')}"
-                )
+                logger.info(f"Modifier: {MODIFIER_NAMES.get(old, '?')} -> "
+                            f"{MODIFIER_NAMES.get(new_modifier, '?')}")
                 return True
         else:
-            # New pending modifier
             self._pending_modifier = new_modifier
             self._modifier_settle_counter = 1
 
         return False
 
-    def get_chord(self, right_finger_count: int) -> Optional[MappedChord]:
+    def get_chord(self, right_finger_count: int,
+                  thumb_extended: bool = False) -> Optional[MappedChord]:
         """
-        Get the final chord for a right hand finger count + current modifier.
+        Get the final chord.
 
         Args:
             right_finger_count: Right hand finger count (1-5).
+            thumb_extended: If True, apply first inversion.
 
         Returns:
-            MappedChord with full chord info and modifier metadata.
+            MappedChord with full info.
         """
         self._current_degree = right_finger_count
         modifier = self._active_modifier
 
-        # Handle degree override (vi chord)
+        # Handle degree overrides
         degree = right_finger_count
         if modifier == Modifier.DEGREE_VI:
-            degree = 6  # Override to vi regardless of right hand
+            degree = 6
+        elif modifier == Modifier.DEGREE_VII:
+            degree = 7
 
         # Get base diatonic chord
         base = self._engine.get_chord_for_degree(degree)
         if base is None:
             return None
 
-        # Apply modifier to transform the chord
-        if modifier == Modifier.NONE or modifier == Modifier.DEGREE_VI:
-            # No transformation needed (DEGREE_VI already changed the degree)
-            return MappedChord(
-                chord_info=base,
-                modifier=modifier,
+        # Apply modifier transformation
+        if modifier == Modifier.SEVENTH:
+            result = self._apply_seventh(base)
+        elif modifier == Modifier.SUS4:
+            result = self._apply_sus4(base)
+        elif modifier == Modifier.NINTH:
+            result = self._apply_ninth(base)
+        else:
+            # NONE, DEGREE_VI, DEGREE_VII — use base chord as-is
+            result = MappedChord(
+                chord_info=base, modifier=modifier,
                 modifier_name=MODIFIER_NAMES[modifier],
                 display_name=base.chord_name,
             )
 
-        if modifier == Modifier.SEVENTH:
-            return self._apply_seventh(base, modifier)
+        # Apply inversion if thumb is extended
+        if thumb_extended:
+            result = self._apply_inversion(result)
 
-        if modifier == Modifier.SUS4:
-            return self._apply_sus4(base, modifier)
+        return result
 
-        if modifier == Modifier.POWER:
-            return self._apply_power(base, modifier)
+    # ── Chord transformations ──
 
-        if modifier == Modifier.OCTAVE_UP:
-            return self._apply_octave_up(base, modifier)
-
-        return MappedChord(
-            chord_info=base, modifier=modifier,
-            modifier_name="", display_name=base.chord_name,
-        )
-
-    def _apply_seventh(self, base: ChordInfo, modifier: Modifier) -> MappedChord:
-        """Add a 7th to the chord. Uses diatonic 7th (from the scale)."""
+    def _apply_seventh(self, base: ChordInfo) -> MappedChord:
+        """Add diatonic 7th."""
         root_midi = base.midi_notes[0]
-        root_semitone = root_midi % 12
+        root_semi = root_midi % 12
 
-        # Determine 7th interval based on chord quality
+        # Determine 7th type from chord quality
         if base.quality == ChordQuality.MAJOR:
-            # Major chord gets major 7th (11 semitones)
-            seventh_interval = 11
-            suffix = "maj7"
+            if base.degree == 5:
+                # V chord = dominant 7th (major triad + minor 7th)
+                seventh = 10
+                suffix = "7"
+            else:
+                # Other major chords = major 7th
+                seventh = 11
+                suffix = "maj7"
         elif base.quality == ChordQuality.MINOR:
-            # Minor chord gets minor 7th (10 semitones)
-            seventh_interval = 10
+            seventh = 10
             suffix = "m7"
         elif base.quality == ChordQuality.DIMINISHED:
-            # Diminished gets minor 7th (half-diminished)
-            seventh_interval = 10
-            suffix = "m7b5"
+            seventh = 9  # Fully diminished 7th = 9 semitones
+            suffix = "dim7"
         else:
-            # Default: minor 7th (dominant 7th for major chords on V)
-            seventh_interval = 10
+            seventh = 10
             suffix = "7"
 
-        # Special case: V chord gets dominant 7th (major triad + minor 7th)
-        if base.degree == 5 and base.quality == ChordQuality.MAJOR:
-            seventh_interval = 10
-            suffix = "7"
+        notes = base.midi_notes + [min(127, root_midi + seventh)]
+        names = base.note_names + [NOTE_NAMES[(root_semi + seventh) % 12]]
 
-        seventh_note = root_midi + seventh_interval
-        new_notes = base.midi_notes + [min(127, seventh_note)]
-        seventh_name = NOTE_NAMES[(root_semitone + seventh_interval) % 12]
-        new_names = base.note_names + [seventh_name]
-
-        new_info = ChordInfo(
-            midi_notes=new_notes,
-            root_name=base.root_name,
+        info = ChordInfo(
+            midi_notes=notes, root_name=base.root_name,
             chord_name=f"{base.root_name}{suffix}",
-            roman_numeral=base.roman_numeral + suffix.replace(base.root_name, ""),
-            quality=base.quality,
-            degree=base.degree,
-            note_names=new_names,
-            velocity=base.velocity,
+            roman_numeral=f"{base.roman_numeral}{suffix}",
+            quality=base.quality, degree=base.degree,
+            note_names=names, velocity=base.velocity,
         )
-        return MappedChord(
-            chord_info=new_info, modifier=modifier,
-            modifier_name="7th", display_name=new_info.chord_name,
-        )
+        return MappedChord(chord_info=info, modifier=Modifier.SEVENTH,
+                           modifier_name="7th", display_name=info.chord_name)
 
-    def _apply_sus4(self, base: ChordInfo, modifier: Modifier) -> MappedChord:
-        """Replace the 3rd with a 4th (suspended 4th)."""
+    def _apply_sus4(self, base: ChordInfo) -> MappedChord:
+        """Replace 3rd with 4th."""
         root_midi = base.midi_notes[0]
-        root_semitone = root_midi % 12
+        root_semi = root_midi % 12
 
-        # sus4 = root, 4th (5 semitones), 5th (7 semitones)
-        sus4_intervals = [0, 5, 7]
-        new_notes = [min(127, root_midi + iv) for iv in sus4_intervals]
-        new_names = [NOTE_NAMES[(root_semitone + iv) % 12] for iv in sus4_intervals]
+        intervals = [0, 5, 7]
+        notes = [min(127, root_midi + iv) for iv in intervals]
+        names = [NOTE_NAMES[(root_semi + iv) % 12] for iv in intervals]
 
-        new_info = ChordInfo(
-            midi_notes=new_notes,
-            root_name=base.root_name,
+        info = ChordInfo(
+            midi_notes=notes, root_name=base.root_name,
             chord_name=f"{base.root_name}sus4",
-            roman_numeral=base.roman_numeral + "sus4",
-            quality=ChordQuality.SUS4,
-            degree=base.degree,
-            note_names=new_names,
-            velocity=base.velocity,
+            roman_numeral=f"{base.roman_numeral}sus4",
+            quality=ChordQuality.SUS4, degree=base.degree,
+            note_names=names, velocity=base.velocity,
         )
-        return MappedChord(
-            chord_info=new_info, modifier=modifier,
-            modifier_name="sus4", display_name=new_info.chord_name,
-        )
+        return MappedChord(chord_info=info, modifier=Modifier.SUS4,
+                           modifier_name="sus4", display_name=info.chord_name)
 
-    def _apply_power(self, base: ChordInfo, modifier: Modifier) -> MappedChord:
-        """Root + 5th only (power chord)."""
+    def _apply_ninth(self, base: ChordInfo) -> MappedChord:
+        """
+        Build a 9th chord: triad + 7th + 9th.
+
+        The 9th is the 2nd degree of the scale placed an octave above the root.
+        9th chords are the bread and butter of neo-soul, R&B, lo-fi beats.
+        """
         root_midi = base.midi_notes[0]
-        root_semitone = root_midi % 12
+        root_semi = root_midi % 12
 
-        # Power chord = root + 5th (7 semitones)
-        power_intervals = [0, 7]
-        new_notes = [min(127, root_midi + iv) for iv in power_intervals]
-        new_names = [NOTE_NAMES[(root_semitone + iv) % 12] for iv in power_intervals]
+        # Get the 7th interval (same logic as _apply_seventh)
+        if base.quality == ChordQuality.MAJOR:
+            if base.degree == 5:
+                seventh = 10  # Dominant 9th
+                suffix = "9"
+            else:
+                seventh = 11  # Major 9th
+                suffix = "maj9"
+        elif base.quality == ChordQuality.MINOR:
+            seventh = 10  # Minor 9th
+            suffix = "m9"
+        elif base.quality == ChordQuality.DIMINISHED:
+            seventh = 9
+            suffix = "dim9"
+        else:
+            seventh = 10
+            suffix = "9"
 
-        new_info = ChordInfo(
-            midi_notes=new_notes,
-            root_name=base.root_name,
-            chord_name=f"{base.root_name}5",
-            roman_numeral=base.roman_numeral + "5",
-            quality=base.quality,
-            degree=base.degree,
-            note_names=new_names,
-            velocity=base.velocity,
+        # The 9th interval = major 2nd up an octave = 14 semitones
+        # (For minor 9th chords this is still a major 9th — the standard voicing)
+        ninth = 14
+
+        notes = base.midi_notes + [
+            min(127, root_midi + seventh),
+            min(127, root_midi + ninth),
+        ]
+        names = base.note_names + [
+            NOTE_NAMES[(root_semi + seventh) % 12],
+            NOTE_NAMES[(root_semi + ninth) % 12],
+        ]
+
+        info = ChordInfo(
+            midi_notes=notes, root_name=base.root_name,
+            chord_name=f"{base.root_name}{suffix}",
+            roman_numeral=f"{base.roman_numeral}{suffix}",
+            quality=base.quality, degree=base.degree,
+            note_names=names, velocity=base.velocity,
+        )
+        return MappedChord(chord_info=info, modifier=Modifier.NINTH,
+                           modifier_name="9th", display_name=info.chord_name)
+
+    def _apply_inversion(self, mapped: MappedChord) -> MappedChord:
+        """
+        Apply first inversion: move the lowest note up one octave.
+
+        First inversion changes the bass note, which changes the harmonic feel:
+        C major root position: C4 E4 G4 (strong, grounded)
+        C major 1st inversion: E4 G4 C5 (lighter, smoother for voice leading)
+        """
+        notes = list(mapped.chord_info.midi_notes)
+        if len(notes) < 2:
+            return mapped
+
+        # Move lowest note up an octave
+        lowest = notes.pop(0)
+        inverted_note = min(127, lowest + 12)
+        notes.append(inverted_note)
+
+        # Rotate note names to match
+        names = list(mapped.chord_info.note_names)
+        if names:
+            first_name = names.pop(0)
+            names.append(first_name)
+
+        display = mapped.display_name + "/inv"
+        roman = mapped.chord_info.roman_numeral
+
+        info = ChordInfo(
+            midi_notes=notes, root_name=mapped.chord_info.root_name,
+            chord_name=display,
+            roman_numeral=roman,
+            quality=mapped.chord_info.quality,
+            degree=mapped.chord_info.degree,
+            note_names=names, velocity=mapped.chord_info.velocity,
         )
         return MappedChord(
-            chord_info=new_info, modifier=modifier,
-            modifier_name="power", display_name=new_info.chord_name,
-        )
-
-    def _apply_octave_up(self, base: ChordInfo, modifier: Modifier) -> MappedChord:
-        """Shift all notes up one octave."""
-        new_notes = [min(127, n + 12) for n in base.midi_notes]
-
-        new_info = ChordInfo(
-            midi_notes=new_notes,
-            root_name=base.root_name,
-            chord_name=base.chord_name + " +oct",
-            roman_numeral=base.roman_numeral,
-            quality=base.quality,
-            degree=base.degree,
-            note_names=base.note_names,
-            velocity=base.velocity,
-        )
-        return MappedChord(
-            chord_info=new_info, modifier=modifier,
-            modifier_name="+oct", display_name=new_info.chord_name,
+            chord_info=info, modifier=mapped.modifier,
+            modifier_name=mapped.modifier_name,
+            display_name=display, inverted=True,
         )
 
     def reset(self):
-        """Reset modifier state."""
         self._active_modifier = Modifier.NONE
         self._pending_modifier = Modifier.NONE
         self._modifier_settle_counter = 0
