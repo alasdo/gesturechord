@@ -26,6 +26,8 @@ Note tracking:
 """
 
 import logging
+import random
+import time
 from typing import List, Optional, Set, Tuple
 
 import mido
@@ -176,10 +178,13 @@ class MidiOutput:
 
     def play_chord(self, midi_notes: List[int], velocity: int = 100) -> None:
         """
-        Play a chord. Automatically stops any previously sounding notes first.
+        Play a chord with humanized timing.
 
-        This is the primary method for chord output. It handles the full
-        lifecycle: stop old chord → send new note-ons.
+        Notes are micro-staggered by 1-4ms each and get subtle velocity
+        variation (±4). This prevents the robotic "all notes at once" feel
+        of perfect simultaneous triggering. The stagger is below the
+        threshold of perceiving individual notes but gives the chord
+        a natural "human" width.
 
         Args:
             midi_notes: List of MIDI note numbers (0-127).
@@ -188,19 +193,22 @@ class MidiOutput:
         if not self._is_open:
             return
 
-        # Stop any currently sounding notes
         self._stop_active_notes()
 
-        # Send note-on for each note in the chord
-        for note in midi_notes:
+        for i, note in enumerate(midi_notes):
             note = max(0, min(127, note))
-            vel = max(0, min(127, velocity))
+            # Subtle velocity variation: ±4 per note
+            vel_offset = random.randint(-4, 4)
+            vel = max(1, min(127, velocity + vel_offset))
             msg = mido.Message("note_on", note=note, velocity=vel, channel=self.channel)
             self._port.send(msg)
             self._active_notes.add(note)
 
-        note_names = [_midi_to_name(n) for n in midi_notes]
-        logger.debug(f"MIDI note-on: {note_names} vel={velocity}")
+            # Micro-stagger: 1-3ms between notes (skip on last note)
+            if i < len(midi_notes) - 1:
+                time.sleep(random.uniform(0.001, 0.003))
+
+        logger.debug(f"MIDI chord: {[_midi_to_name(n) for n in midi_notes]} vel≈{velocity}")
 
     def stop_chord(self) -> None:
         """Stop all currently sounding notes."""
