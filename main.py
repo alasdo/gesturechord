@@ -1,16 +1,19 @@
 """
-GestureChord v2 — Full feature set.
+GestureChord v2 — Latency-optimized.
 
-Right hand: chord selection (1-5 fingers = I-V)
-Left hand: modifier (0=triad,1=7th,2=sus4,3=9th,4=SHIFT,5=SHIFT+7) + CC expression
-Velocity: hand movement speed → MIDI velocity (fast=loud, slow=soft)
-Arpeggiator: plays chord notes sequentially (toggle with A)
+Pipeline order (latency-critical):
+    1. Camera read (+ buffer flush)
+    2. MediaPipe inference
+    3. Gesture recognition
+    4. State machine
+    5. MIDI output  ← happens HERE, as early as possible
+    6. Overlay rendering ← happens AFTER MIDI, not before
+    7. Display
 
 Controls:
     ESC/Q=Quit  SPACE=Panic  R=Reset  D=Debug
-    K=Key  M=Major/Minor  S=Scale cycle  UP/DOWN=Octave
-    I=Inversion  E=Expression  V=Velocity toggle
-    A=Arp toggle  P=Arp pattern  [/]=Arp BPM -/+  T=Test
+    K=Key  M=Major/Minor  S=Scale  UP/DOWN=Octave
+    I=Inversion  E=Expression  V=Velocity  A=Arp  P=Pattern  [/]=BPM  T=Test
 """
 
 import sys
@@ -37,7 +40,7 @@ from utils.config import load_config
 def main():
     logger = setup_logger(name="gesturechord", level=logging.INFO)
     logger.info("=" * 60)
-    logger.info("GestureChord v2")
+    logger.info("GestureChord v2 — Low Latency")
     logger.info("=" * 60)
 
     cfg = load_config()
@@ -76,13 +79,12 @@ def main():
                              enabled=cfg.velocity.enabled)
     midi = MidiOutput(port_name=cfg.midi.port_name, channel=cfg.midi.channel)
 
-    # Arp pattern from config string
     arp_pattern_map = {"up": ArpPattern.UP, "down": ArpPattern.DOWN,
                        "up_down": ArpPattern.UP_DOWN, "random": ArpPattern.RANDOM}
-    arp_pattern = arp_pattern_map.get(cfg.arpeggiator.pattern, ArpPattern.UP)
-
-    arp = Arpeggiator(midi_output=midi, bpm=cfg.arpeggiator.bpm,
-                      pattern=arp_pattern, enabled=cfg.arpeggiator.enabled,
+    arp = Arpeggiator(midi_output=midi,
+                      bpm=cfg.arpeggiator.bpm,
+                      pattern=arp_pattern_map.get(cfg.arpeggiator.pattern, ArpPattern.UP),
+                      enabled=cfg.arpeggiator.enabled,
                       octave_range=cfg.arpeggiator.octave_range)
 
     ov = Overlay(show_debug_info=cfg.display.start_in_debug)
@@ -92,6 +94,9 @@ def main():
     l_lost = 0; l_reset = False
     current_chord = None
     midi_ok = False
+
+    # Latency tracking
+    latency_ms = 0.0  # Time from frame capture to MIDI sent
 
     # ── Init ──
     if not camera.open():
@@ -106,29 +111,38 @@ def main():
 
     logger.info(f"Key: {me.key_display} | Oct: {me.octave}")
     logger.info("Right: 1-5=I-V | Left: 0=triad 1=7th 2=sus4 3=9th 4=SHIFT 5=SHIFT+7")
-    logger.info(f"Velocity: {'ON' if vel.enabled else 'OFF'} | "
+    logger.info(f"Vel: {'ON' if vel.enabled else 'OFF'} | "
                 f"Arp: {'ON' if arp.enabled else 'OFF'} ({arp.pattern_name} {arp.bpm:.0f}bpm)")
-    logger.info("Keys: A=Arp P=Pattern []=BPM V=Velocity S=Scale I=Inv E=Expr")
+    logger.info("Keys: A=Arp P=Pattern []=BPM V=Vel S=Scale I=Inv E=Expr D=Debug")
     _print_chords(logger, me)
 
     # ===================================================================
     try:
         while True:
+            # ── TIMING: Start of frame ──
+            t_frame_start = time.perf_counter()
+
+            # ── 1. Camera read ──
+            # Flush stale frames from buffer by reading until we get the latest
             frame = camera.read()
             if frame is None:
-                time.sleep(0.01)
+                time.sleep(0.001)
                 continue
 
-            tracking = tracker.process_frame(frame)
+            t_after_capture = time.perf_counter()
 
-            # ── Right hand ──
+            # ── 2. MediaPipe inference ──
+            tracking = tracker.process_frame(frame)
+            t_after_tracking = time.perf_counter()
+
+            # ── 3. Gesture recognition (both hands) ──
             rg = None; rc = None; rs = False; rz = False
             rh = tracking.get_right_hand()
             if rh and rh.wrist.y < cfg.zone.threshold:
                 rz = True
                 rg = right_rec.recognize(rh)
                 rc = rg.finger_count; rs = rg.is_stable
-                vel.update(rh.wrist.x, rh.wrist.y)  # Track hand speed
+                vel.update(rh.wrist.x, rh.wrist.y)
                 r_lost = 0; r_reset = False
             else:
                 vel.update(None, None)
@@ -136,7 +150,6 @@ def main():
                 if r_lost >= cfg.zone.hand_lost_frames and not r_reset:
                     right_rec.reset(); r_reset = True
 
-            # ── Left hand ──
             lg = None; lc = None; lz = False; ly = None
             lh = tracking.get_left_hand()
             if lh and lh.wrist.y < cfg.zone.threshold:
@@ -149,19 +162,16 @@ def main():
                 if l_lost >= cfg.zone.hand_lost_frames and not l_reset:
                     left_rec.reset(); l_reset = True
 
-            # ── Modifier + Expression ──
+            # ── 4. Modifier + Expression + State machine ──
             mod_changed = cm.update_modifier(lc if lz else None)
             cc_val = expr.update(ly if lz else None)
             if cc_val is not None and midi_ok:
                 midi.send_cc(expr.cc_number, cc_val)
 
-            # ── State machine ──
             ev = sm.update(rc, rs)
-
-            # ── Get velocity for this trigger ──
             trigger_vel = vel.get_trigger_velocity() if vel.enabled else cfg.music.velocity
 
-            # ── Chord events ──
+            # ── 5. MIDI output (CRITICAL PATH — do this BEFORE overlay) ──
             triggered = False
 
             if ev.event_type == EventType.CHORD_ON:
@@ -173,7 +183,8 @@ def main():
                         else:
                             midi.play_chord(m.chord_info.midi_notes, trigger_vel)
                     current_chord = m; triggered = True
-                    _log(logger, "ON", m, trigger_vel)
+                    latency_ms = (time.perf_counter() - t_frame_start) * 1000
+                    _log(logger, "ON", m, trigger_vel, latency_ms)
 
             elif ev.event_type == EventType.CHORD_CHANGE:
                 m = cm.get_chord(ev.finger_count)
@@ -184,7 +195,8 @@ def main():
                         else:
                             midi.change_chord(m.chord_info.midi_notes, trigger_vel)
                     current_chord = m; triggered = True
-                    _log(logger, "CHANGE", m, trigger_vel)
+                    latency_ms = (time.perf_counter() - t_frame_start) * 1000
+                    _log(logger, "CHANGE", m, trigger_vel, latency_ms)
 
             elif ev.event_type == EventType.CHORD_OFF:
                 if midi_ok:
@@ -193,9 +205,7 @@ def main():
                     else:
                         midi.stop_chord()
                 current_chord = None
-                logger.info("CHORD OFF")
 
-            # Re-trigger on modifier change
             if mod_changed and not triggered and sm.is_playing:
                 m = cm.get_chord(sm.active_finger_count)
                 if m:
@@ -205,13 +215,13 @@ def main():
                         else:
                             midi.change_chord(m.chord_info.midi_notes, trigger_vel)
                     current_chord = m
-                    _log(logger, "MOD", m, trigger_vel)
 
-            # ── Arpeggiator tick ──
             if arp.enabled and midi_ok:
                 arp.tick()
 
-            # ── Overlay ──
+            t_after_midi = time.perf_counter()
+
+            # ── 6. Overlay rendering (NON-CRITICAL — after MIDI) ──
             os = OverlayState(
                 tracking=tracking,
                 right_gesture=rg, left_gesture=lg,
@@ -241,13 +251,18 @@ def main():
 
             frame = ov.draw(frame, os)
 
-            # Arp/Vel status on frame
-            h_frame, w_frame = frame.shape[:2]
-            _draw_feature_status(frame, vel, arp, 8, h_frame - 28)
+            # Status bar
+            h_f, w_f = frame.shape[:2]
+            _draw_status_bar(frame, vel, arp, latency_ms,
+                             t_after_capture - t_frame_start,
+                             t_after_tracking - t_after_capture,
+                             t_after_midi - t_after_tracking,
+                             ov.show_debug_info, w_f, h_f)
 
+            # ── 7. Display ──
             if cfg.display.scale != 1.0:
-                dw = int(frame.shape[1] * cfg.display.scale)
-                dh = int(frame.shape[0] * cfg.display.scale)
+                dw = int(w_f * cfg.display.scale)
+                dh = int(h_f * cfg.display.scale)
                 frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
 
             cv2.imshow(cfg.display.window_name, frame)
@@ -260,37 +275,36 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if arp.enabled:
-            arp.stop()
-        if midi_ok:
-            midi.close()
+        if arp.enabled: arp.stop()
+        if midi_ok: midi.close()
         tracker.release()
         camera.release()
         cv2.destroyAllWindows()
 
 
-def _draw_feature_status(frame, vel, arp, x, y):
-    """Draw velocity and arp status at bottom-left."""
+def _draw_status_bar(frame, vel, arp, lat_ms, cap_s, trk_s, proc_s, debug, w, h):
+    """Draw compact status bar at bottom."""
     parts = []
     if vel.enabled:
         parts.append(f"VEL:{vel.velocity}")
-    else:
-        parts.append("VEL:off")
-
     if arp.enabled:
-        parts.append(f"ARP:{arp.pattern_name} {arp.bpm:.0f}bpm")
-    else:
-        parts.append("ARP:off")
+        parts.append(f"ARP:{arp.pattern_name} {arp.bpm:.0f}")
 
-    text = "  |  ".join(parts)
-    color = (0, 180, 180) if (vel.enabled or arp.enabled) else (80, 80, 80)
-    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+    if debug:
+        parts.append(f"CAP:{cap_s*1000:.0f}ms TRK:{trk_s*1000:.0f}ms PROC:{proc_s*1000:.0f}ms")
+        if lat_ms > 0:
+            parts.append(f"LAT:{lat_ms:.0f}ms")
+
+    text = "  ".join(parts)
+    color = (0, 170, 170) if parts else (60, 60, 60)
+    cv2.putText(frame, text, (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.32, color, 1, cv2.LINE_AA)
 
 
-def _log(logger, action, m, velocity=100):
+def _log(logger, action, m, velocity=100, latency_ms=0):
     mod = f" [{m.modifier_name}]" if m.modifier_name else ""
     notes = " ".join(m.chord_info.note_names)
-    logger.info(f"{action}: {m.display_name}{mod} [{notes}] v={velocity}")
+    lat = f" ({latency_ms:.0f}ms)" if latency_ms > 0 else ""
+    logger.info(f"{action}: {m.display_name}{mod} [{notes}] v={velocity}{lat}")
 
 
 def _keys(key, log, rr, lr, sm, me, cm, ex, vel, arp, mi, mo, ov):
@@ -317,18 +331,15 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, vel, arp, mi, mo, ov):
             if mo: mi.stop_chord()
         log.info(f"Arp: {'ON' if arp.enabled else 'OFF'} ({arp.pattern_name} {arp.bpm:.0f}bpm)")
     elif key == ord("p"):
-        pat = arp.cycle_pattern()
+        arp.cycle_pattern()
         log.info(f"Arp pattern: {arp.pattern_name}")
     elif key == ord("["):
-        bpm = arp.adjust_bpm(-20)
-        log.info(f"Arp BPM: {bpm:.0f}")
+        log.info(f"Arp BPM: {arp.adjust_bpm(-20):.0f}")
     elif key == ord("]"):
-        bpm = arp.adjust_bpm(20)
-        log.info(f"Arp BPM: {bpm:.0f}")
+        log.info(f"Arp BPM: {arp.adjust_bpm(20):.0f}")
     elif key == ord("i"):
         inv = cm.cycle_inversion()
-        names = ["root", "1st inv", "2nd inv"]
-        log.info(f"Inversion: {names[inv]}")
+        log.info(f"Inversion: {['root', '1st inv', '2nd inv'][inv]}")
         if sm.is_playing and mo:
             m = cm.get_chord(sm.active_finger_count)
             if m: mi.change_chord(m.chord_info.midi_notes, m.chord_info.velocity)

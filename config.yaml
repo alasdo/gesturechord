@@ -25,20 +25,20 @@ tracking:
 
 # ── Gesture Recognition ──
 gesture:
-  hysteresis_high: 0.55  # Finger "up" threshold (ratio must exceed this)
-  hysteresis_low: 0.35   # Finger "down" threshold (ratio must drop below this)
-  rolling_window: 7      # Frames for smoothing finger count (~233ms at 30fps)
+  hysteresis_high: 0.55  # Finger "up" threshold
+  hysteresis_low: 0.35   # Finger "down" threshold
+  rolling_window: 5      # Reduced from 7: ~167ms smoothing (was ~233ms)
 
-# ── State Machine (debouncing) ──
+# ── State Machine (debouncing) — TUNED FOR LOW LATENCY ──
 state_machine:
-  confirmation_frames: 5  # Frames to confirm new chord from idle (~167ms)
-  change_frames: 4        # Frames to confirm chord change (~133ms)
-  settle_frames: 3        # Frames count must be stable before confirming (~100ms)
-  release_grace_ms: 250   # Ms before note-off after hand loss
+  confirmation_frames: 3  # Reduced from 5: ~100ms first chord (was ~167ms)
+  change_frames: 2        # Reduced from 4: ~67ms chord change (was ~133ms)
+  settle_frames: 2        # Reduced from 3: ~67ms anti-cascade (was ~100ms)
+  release_grace_ms: 150   # Reduced from 250: faster note-off
 
 # ── Left Hand Modifier ──
 modifier:
-  settle_frames: 4        # Frames for modifier debounce
+  settle_frames: 3        # Reduced from 4: faster modifier response
 
 # ── Music ──
 music:
