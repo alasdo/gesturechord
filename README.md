@@ -2,77 +2,126 @@
 
 **A two-hand gesture-to-MIDI chord controller for FL Studio.**
 
-Use your webcam as a musical instrument. Your right hand selects chords by holding up fingers, your left hand modifies chord quality and controls effects in real time.
+Turn your webcam into a musical instrument. Right hand selects chords, left hand shapes them and controls effects — all in real time with rhythmic expression.
+
+## Quick Start
+
+```bash
+# 1. Clone and setup
+git clone https://github.com/YOUR_USER/gesturechord.git
+cd gesturechord
+setup.bat                        # Windows: creates venv + installs deps
+
+# 2. Install MIDI driver (one-time)
+# Download loopBe1: https://www.nerds.de/en/loopbe1.html
+# Reboot after installing
+
+# 3. Configure FL Studio
+# Options → MIDI Settings → enable loopBe input → load a synth plugin
+
+# 4. Run
+run.bat                          # Or: venv\Scripts\activate && python main.py
+```
+
+The hand tracking model (~12 MB) downloads automatically on first run.
 
 ---
 
-## Features
+## How It Works
 
 ### Right Hand — Chord Selection
-| Fingers | Chord |
-|---------|-------|
-| 1 | I (tonic) |
-| 2 | ii |
-| 3 | iii |
-| 4 | IV |
-| 5 | V |
-| Fist | Silence |
 
-### Left Hand — Chord Modifiers
-| Fingers | Modifier | Right 1-5 maps to |
-|---------|----------|-------------------|
-| 0 / absent | Basic triad | I, ii, iii, IV, V |
-| 1 | 7th chord | I7, ii7, iii7, IV7, V7 |
-| 2 | Suspended 4th | Isus4, iisus4, etc. |
-| 3 | 9th chord | Imaj9, iim9, etc. |
-| 4 | **SHIFT** | vi, vii°, I+, ii+, iii+ |
-| 5 | **SHIFT + 7th** | vi7, vii°7, I+7, ii+7, iii+7 |
+Hold up fingers to play chords. Fist = silence.
 
-SHIFT mode remaps the right hand to upper degrees, giving you all 7 scale degrees. Right 3-5 in shift mode play degrees I-III one octave higher.
+| Fingers | Default (left 0) | SHIFT (left 4) | SHIFT+7 (left 5) |
+|---------|-------------------|-----------------|-------------------|
+| 1 | I | vi | vi7 |
+| 2 | ii | vii° | vii°7 |
+| 3 | iii | I (octave up) | Imaj7 (oct up) |
+| 4 | IV | ii (octave up) | ii7 (oct up) |
+| 5 | V | iii (octave up) | iii7 (oct up) |
+| Fist | Silence | Silence | Silence |
 
-### Available Scales
-Press **S** to cycle through scales, **M** to toggle major/minor:
+All 7 scale degrees are accessible using the SHIFT modifier.
 
-major, natural minor, harmonic minor, melodic minor, dorian, phrygian, lydian, mixolydian, locrian, pentatonic major, pentatonic minor, blues, phrygian dominant, hungarian minor, whole tone, chromatic
+### Left Hand — Three Roles Simultaneously
 
-### Inversions (Keyboard Toggle)
-Press **I** to cycle through voicings:
+**1. Finger count → chord modifier**
 
-| Press I | Voicing | Example (C major) |
-|---------|---------|-------------------|
-| 0 (default) | Root position | C E G |
-| 1 | 1st inversion | E G C |
-| 2 | 2nd inversion | G C E |
+| Fingers | Modifier |
+|---------|----------|
+| 0 / absent | Basic triad |
+| 1 | 7th chord |
+| 2 | Suspended 4th |
+| 3 | 9th chord |
+| 4 | SHIFT (access vi, vii) |
+| 5 | SHIFT + 7th |
 
-Inversions apply to all chords until you press I again. Useful for smooth voice leading between chord changes.
+**2. Hand height (Y) → CC1 expression** (toggle: E)
 
-### Left Hand — Expression Control
-Your left hand's height in the frame sends continuous MIDI CC data:
-- **Hand high** = CC 127 (maximum)
-- **Hand low** = CC 0 (minimum)
-- Smoothed to eliminate jitter
-- Map to any FL Studio parameter (filter, reverb, delay, etc.)
+Move hand up/down to control any FL Studio parameter (filter, reverb, delay, etc.) via MIDI CC1.
 
-### Dynamic Velocity
-Hand movement speed controls how loud chords play:
-- **Fast gesture** = high velocity (loud, punchy)
-- **Slow/still gesture** = low velocity (soft, subtle)
-- Toggle with **V** key
+**3. Hand horizontal (X) → CC2 expression** (toggle: W)
 
-### Arpeggiator
-Instead of block chords, play notes one at a time in sequence:
-- Toggle with **A** key
-- **P** = cycle pattern (up, down, up-down, random)
-- **[** / **]** = decrease / increase BPM
-- Configurable in config.yaml (bpm, pattern, octave range)
+Move hand left/right to control a second parameter via MIDI CC74. Both CC channels work simultaneously.
+
+### Rhythm System
+
+Three rhythm modes (one active at a time):
+
+**Pump retrigger (R)** — Pump your right hand up/down while holding a chord. Each downward pump retriggers the chord. Pump faster = faster rhythm. Pump harder = louder.
+
+**Groove patterns (G)** — Automatic rhythmic patterns. You select chords, the groove handles timing. 8 patterns: four_floor, syncopated, trap, half_time, offbeat, waltz, shuffle, sparse.
+
+**Arpeggiator (A)** — Plays chord notes one at a time in sequence. 4 patterns: up, down, up-down, random.
 
 ### Other Features
-- Performance zone — hand must be in upper 75% of frame to trigger
-- Settle-then-confirm debouncing — prevents cascade triggers (1→2→3)
-- Fist = instant silence (no confirmation delay)
-- Smart left/right hand identification using position + labels
-- Independent gesture filters per hand
-- Performance mode / debug mode overlay (D to toggle)
+
+- **16 scales** — major, minor, all modes, pentatonic, blues, exotic
+- **Inversions** — root, 1st, 2nd inversion (I key)
+- **Dynamic velocity** — hand speed controls volume (V key)
+- **Humanized voicing** — micro-stagger timing + velocity variation
+- **Configurable** — all parameters in config.yaml
+- **Low latency** — pipeline optimized for ~25-35ms response
+
+---
+
+## Keyboard Controls
+
+### Core
+| Key | Action |
+|-----|--------|
+| ESC / Q | Quit |
+| SPACE | Panic — stop all MIDI notes |
+| X | Full reset (all state + MIDI) |
+| D | Toggle debug / performance overlay |
+| T | Send test note (verify MIDI routing) |
+
+### Music
+| Key | Action |
+|-----|--------|
+| K | Cycle key root (C → C# → D → ...) |
+| M | Toggle major / natural minor |
+| S | Cycle through all 16 scales |
+| + / - | Octave up / down |
+| I | Cycle inversion (root → 1st → 2nd) |
+
+### Expression
+| Key | Action |
+|-----|--------|
+| E | Toggle CC1 (hand height → Mod Wheel) |
+| W | Toggle CC2 (hand X position → CC74) |
+| V | Toggle dynamic velocity |
+
+### Rhythm
+| Key | Action |
+|-----|--------|
+| R | Toggle pump retrigger |
+| G | Toggle groove patterns |
+| F | Cycle groove pattern |
+| A | Toggle arpeggiator |
+| P | Cycle arp pattern |
+| [ / ] | BPM down / up |
 
 ---
 
@@ -81,66 +130,88 @@ Instead of block chords, play notes one at a time in sequence:
 ### Requirements
 - Python 3.9+
 - Webcam
-- Windows (tested), macOS/Linux (should work)
-- FL Studio (or any DAW that accepts MIDI input)
+- Windows (tested), macOS/Linux (should work with minor adjustments)
+- FL Studio or any DAW that accepts MIDI input
 
 ### Installation
+
+**Windows (recommended):**
+```bash
+cd gesturechord
+setup.bat
+```
+
+**Manual:**
 ```bash
 cd gesturechord
 python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # macOS/Linux
-
+venv\Scripts\activate            # Windows
+# source venv/bin/activate       # macOS/Linux
 pip install -r requirements.txt
 ```
 
-### MIDI Routing (Windows)
+### MIDI Routing
+
+**Windows:**
 1. Install **loopBe1**: https://www.nerds.de/en/loopbe1.html
-   (or loopMIDI: https://www.tobias-erichsen.de/software/loopmidi.html)
-2. Reboot after installation
-3. In FL Studio: **Options → MIDI Settings** → enable the loopBe/loopMIDI port in Input
+2. **Reboot** after installing (required for the driver to load)
+3. In FL Studio: **Options → MIDI Settings** → enable the loopBe input port
 4. Load any synth plugin (FL Keys for testing)
+
+**macOS:**
+Use the built-in IAC Driver (Audio MIDI Setup → IAC Driver → enable).
+
+**Linux:**
+Use JACK or ALSA virtual MIDI ports.
 
 ### Running
 ```bash
+run.bat                          # Windows quick launcher
+# Or:
+venv\Scripts\activate
 python main.py
 ```
 
-The model file (`hand_landmarker.task`, ~12 MB) downloads automatically on first run.
+---
+
+## Linking Effects in FL Studio
+
+### Method 1: Right-click (native plugins)
+1. Right-click a knob in a native FL Studio plugin
+2. Select "Link to controller..."
+3. Move your left hand — FL Studio detects the CC
+4. Click "Accept"
+
+### Method 2: Ctrl+J Multilink (any plugin including third-party)
+1. Press **Ctrl+J** in FL Studio (Multilink mode)
+2. Wiggle the knob you want to control
+3. Move your left hand
+4. FL Studio links them automatically
+5. Press Ctrl+J again to exit linking mode
+
+This works with Splice, Serum, Vital, and any third-party plugin.
 
 ---
 
-## Keyboard Controls
+## Configuration
 
-| Key | Action |
-|-----|--------|
-| ESC / Q | Quit |
-| SPACE | Panic — stop all MIDI notes |
-| K | Cycle key root (C → C# → D → ...) |
-| M | Toggle major / natural minor |
-| S | Cycle through all scales |
-| UP / DOWN | Octave up / down |
-| D | Toggle debug overlay |
-| E | Toggle expression CC on/off |
-| V | Toggle dynamic velocity on/off |
-| A | Toggle arpeggiator on/off |
-| P | Cycle arp pattern (up/down/up-down/random) |
-| [ / ] | Arp BPM down / up (±20) |
-| I | Cycle inversion (root → 1st → 2nd → root) |
-| T | Send test note (verify MIDI routing) |
-| R | Full reset (filters + state + MIDI) |
+All settings live in `config.yaml`. Delete it to regenerate defaults.
 
----
+### Key Settings
 
-## Linking Expression to FL Studio Effects
-
-1. Run GestureChord and raise your left hand in the frame
-2. In FL Studio, right-click any knob or slider in a plugin
-3. Select **"Link to controller..."**
-4. Move your left hand up and down — FL Studio auto-detects the CC
-5. Click **"Accept"**
-
-Now that parameter follows your hand height. Works with any plugin parameter: filter cutoff, reverb wet, delay feedback, volume, etc.
+| Setting | What it does | Default |
+|---------|-------------|---------|
+| `music.key` | Root note | C |
+| `music.scale` | Scale type | major |
+| `music.octave` | Base octave (3-6) | 4 |
+| `display.scale` | Window size multiplier | 1.5 |
+| `expression.cc_number` | CC1 number | 1 (Mod Wheel) |
+| `expression2.cc_number` | CC2 number | 74 (Cutoff) |
+| `rhythm.velocity_threshold` | Pump sensitivity | 0.010 |
+| `groove.bpm` | Groove tempo | 120 |
+| `groove.gate_length` | Note sustain (0.5-1.0) | 0.85 |
+| `groove.humanize_ms` | Timing variation | 10 |
+| `arpeggiator.bpm` | Arp speed | 160 |
 
 ---
 
@@ -148,72 +219,80 @@ Now that parameter follows your hand height. Works with any plugin parameter: fi
 
 ```
 gesturechord/
-├── main.py                      # Main loop, two-hand pipeline
-├── config.yaml                  # All settings (edit to customize)
+├── main.py                      # Main loop — full pipeline
+├── config.yaml                  # All settings (YAML)
+├── setup.bat                    # Windows setup script
+├── run.bat                      # Quick launcher
+├── requirements.txt             # Python dependencies
 ├── vision/
-│   ├── camera.py                # Webcam capture
+│   ├── camera.py                # Webcam capture + buffer flush
 │   ├── hand_tracker.py          # MediaPipe HandLandmarker (2-hand)
 │   └── gesture_recognizer.py    # Y-position finger detection
 ├── engine/
 │   ├── state_machine.py         # Settle-then-confirm debouncing
-│   ├── music_theory.py          # Scales, chords, intervals
-│   ├── chord_mapper.py          # Right degree + left modifier → chord
-│   └── expression.py            # Hand Y → smoothed MIDI CC
+│   ├── music_theory.py          # 16 scales, chords, intervals
+│   ├── chord_mapper.py          # Right degree + left modifier + shift
+│   ├── expression.py            # Hand position → smoothed MIDI CC
+│   ├── velocity.py              # Hand speed → MIDI velocity
+│   ├── arpeggiator.py           # Sequential note playback
+│   ├── rhythm_engine.py         # Pump retrigger detection
+│   └── groove_patterns.py       # Automatic rhythm patterns
 ├── midi/
-│   └── midi_output.py           # MIDI notes + CC output
+│   └── midi_output.py           # MIDI notes + CC + humanized voicing
 ├── ui/
-│   └── overlay.py               # Visual feedback overlay
+│   └── overlay.py               # Animated performance/debug overlay
 └── utils/
     ├── filters.py               # Hysteresis, rolling mode, EMA
-    ├── config.py                # YAML config loader
+    ├── config.py                # YAML config loader with typed dataclasses
     └── logger.py                # Structured logging
 ```
 
----
+### Pipeline (per frame)
+```
+Camera → MediaPipe → Gesture Recognition → State Machine → MIDI Output → Overlay
+  ~2ms     ~18ms          ~1ms                ~1ms           ~0ms         ~4ms
+```
 
-## Configuration
-
-All settings live in `config.yaml`. Edit it to customize your setup — changes take effect on next launch. Delete the file to regenerate defaults.
-
-Key settings you might want to change:
-
-| Setting | What it does | Default |
-|---------|-------------|---------|
-| `music.key` | Root note | C |
-| `music.scale` | Scale type | major |
-| `music.octave` | Base octave | 4 |
-| `display.scale` | Window size multiplier | 1.5 |
-| `expression.cc_number` | Which CC to send | 1 (Mod Wheel) |
-| `expression.smoothing` | CC smoothness (lower = smoother) | 0.25 |
-| `state_machine.settle_frames` | Anti-cascade sensitivity | 3 |
-| `gesture.hysteresis_high` | Finger "up" threshold | 0.55 |
-| `zone.threshold` | Performance zone cutoff | 0.75 |
+MIDI fires BEFORE overlay rendering for minimum latency.
 
 ---
 
 ## Troubleshooting
 
-**No MIDI sound:**
-- Press T to send a test note — if you hear it, MIDI routing works
-- Check FL Studio MIDI Settings → Input → loopBe must be enabled
-- Make sure a synth plugin is loaded on a channel
+**No sound from FL Studio:**
+- Press **T** to send a test note — if you hear it, MIDI is working
+- Check FL Studio: Options → MIDI Settings → loopBe must be enabled as Input
+- Make sure a synth plugin is loaded and selected on a channel
+- If you just installed loopBe1, you MUST reboot
 
-**Finger detection wrong:**
-- Press D to see per-finger ratios in the debug panel
-- Ensure palm faces the camera
-- Improve lighting
+**Finger detection inaccurate:**
+- Press **D** for debug mode — check per-finger ratios
+- Face your palm toward the camera
+- Improve lighting (avoid backlight)
+- Keep hands within the zone (above the zone line)
 
 **Chords cascade (1→2→3 when going to 3):**
-- The settle-then-confirm system handles this — increase SETTLE_FRAMES in main.py if needed
+- This is handled by settle-then-confirm debouncing
+- If still happening, increase `state_machine.settle_frames` in config.yaml
 
 **Expression CC jittery:**
-- Lower EXPRESSION_SMOOTHING (e.g., 0.15) for more smoothing
-- Increase EXPRESSION_DEAD_ZONE (e.g., 3.0) for less CC spam
+- Lower `expression.smoothing` (e.g., 0.15) for more smoothing
+- Increase `expression.dead_zone` (e.g., 3.0)
+
+**Third-party plugin CC not linking:**
+- Use **Ctrl+J** (Multilink) instead of right-click "Link to controller"
 
 **FPS too low:**
-- Close other apps
-- Lower DETECTION_CONFIDENCE to 0.5
+- Close other apps using the webcam
+- Lower `tracking.detection_confidence` to 0.5 in config.yaml
+- Press **D** to check timing breakdown
 
-**Hands misidentified (left/right swapped):**
+**Hands swapped (left/right confused):**
 - Keep hands on their respective sides of the frame
-- The system uses X-position as a tiebreaker when labels conflict
+- The system uses X-position as a tiebreaker
+
+---
+
+## License
+
+MIT
