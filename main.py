@@ -107,6 +107,11 @@ def main():
     midi_ok = False
     latency_ms = 0.0
 
+    # Cached display strings (avoid recomputing every frame)
+    _cached_chord_name = ""
+    _cached_roman = ""
+    _cached_notes = ""
+
     # ── Init ──
     if not camera.open():
         logger.error("Cannot open camera."); sys.exit(1)
@@ -189,6 +194,9 @@ def main():
                         else:
                             midi.play_chord(m.chord_info.midi_notes, tv)
                     current_chord = m; triggered = True
+                    _cached_chord_name = m.display_name
+                    _cached_roman = m.chord_info.roman_numeral
+                    _cached_notes = " ".join(m.chord_info.note_names)
                     latency_ms = (time.perf_counter() - t0) * 1000
                     _log(logger, "ON", m, tv, latency_ms)
 
@@ -203,6 +211,9 @@ def main():
                         else:
                             midi.change_chord(m.chord_info.midi_notes, tv)
                     current_chord = m; triggered = True
+                    _cached_chord_name = m.display_name
+                    _cached_roman = m.chord_info.roman_numeral
+                    _cached_notes = " ".join(m.chord_info.note_names)
                     latency_ms = (time.perf_counter() - t0) * 1000
                     _log(logger, "CHANGE", m, tv, latency_ms)
 
@@ -212,6 +223,7 @@ def main():
                     elif arp.enabled: arp.stop()
                     else: midi.stop_chord()
                 current_chord = None; rhythm.reset()
+                _cached_chord_name = ""; _cached_roman = ""; _cached_notes = ""
 
             # Modifier re-trigger
             if mod_changed and not triggered and sm.is_playing:
@@ -225,6 +237,9 @@ def main():
                         else:
                             midi.change_chord(m.chord_info.midi_notes, tv)
                     current_chord = m
+                    _cached_chord_name = m.display_name
+                    _cached_roman = m.chord_info.roman_numeral
+                    _cached_notes = " ".join(m.chord_info.note_names)
 
             # ── Pump retrigger (only when no groove/arp) ──
             pump = rhythm.update(rwy if rz else None)
@@ -240,14 +255,14 @@ def main():
 
             t3 = time.perf_counter()
 
-            # ── Overlay ──
+            # ── Overlay (uses cached strings — no string ops per frame) ──
             os = OverlayState(
                 tracking=tracking,
                 right_gesture=rg, left_gesture=lg,
                 right_in_zone=rz, left_in_zone=lz,
-                chord_name=current_chord.display_name if current_chord else "",
-                roman=current_chord.chord_info.roman_numeral if current_chord else "",
-                notes=" ".join(current_chord.chord_info.note_names) if current_chord else "",
+                chord_name=_cached_chord_name,
+                roman=_cached_roman,
+                notes=_cached_notes,
                 chord_state=ev.state.name,
                 confirm_progress=ev.confirmation_progress,
                 key_display=me.key_display,
@@ -258,6 +273,18 @@ def main():
                 cc_normalized=expr.cc_normalized, cc_enabled=expr.enabled,
                 fps=camera.fps, inference_ms=tracking.inference_time_ms,
                 midi_available=midi_ok, zone_threshold=cfg.zone.threshold,
+                # Rhythm features
+                rhythm_enabled=rhythm.enabled,
+                rhythm_pumping=rhythm.is_pumping,
+                groove_enabled=groove.enabled,
+                groove_pattern=groove.pattern_name,
+                groove_bpm=groove.bpm,
+                arp_enabled=arp.enabled,
+                arp_pattern=arp.pattern_name,
+                arp_bpm=arp.bpm,
+                velocity_enabled=vel.enabled,
+                velocity_value=vel.velocity,
+                chord_triggered=triggered or (pump is not None and sm.is_playing and not groove.enabled and not arp.enabled),
             )
 
             if not current_chord and rc and rc > 0 and ev.state.name in ("CONFIRMING", "CHANGING", "DETECTING"):
@@ -269,14 +296,23 @@ def main():
 
             frame = ov.draw(frame, os)
 
-            h_f, w_f = frame.shape[:2]
-            _draw_status(frame, vel, arp, rhythm, groove, latency_ms,
-                         t1-t0, t2-t1, t3-t2, ov.show_debug_info, w_f, h_f)
+            t4 = time.perf_counter()
+
+            # Debug timing (drawn after overlay, only in debug mode)
+            if ov.show_debug_info:
+                h_f, w_f = frame.shape[:2]
+                total = (t4 - t0) * 1000
+                timing = f"C:{(t1-t0)*1000:.0f} T:{(t2-t1)*1000:.0f} M:{(t3-t2)*1000:.0f} O:{(t4-t3)*1000:.0f} ={total:.0f}ms"
+                if latency_ms > 0:
+                    timing += f"  LAT:{latency_ms:.0f}ms"
+                cv2.putText(frame, timing, (8, h_f-8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 150, 150), 1, cv2.LINE_AA)
 
             if cfg.display.scale != 1.0:
+                h_f, w_f = frame.shape[:2]
                 dw = int(w_f * cfg.display.scale)
                 dh = int(h_f * cfg.display.scale)
-                frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
+                frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_NEAREST)
 
             cv2.imshow(cfg.display.window_name, frame)
 
@@ -292,19 +328,6 @@ def main():
         if midi_ok: midi.close()
         tracker.release(); camera.release()
         cv2.destroyAllWindows()
-
-
-def _draw_status(frame, vel, arp, rhy, grv, lat, cap, trk, proc, dbg, w, h):
-    parts = []
-    if vel.enabled: parts.append(f"VEL:{vel.velocity}")
-    if grv.enabled: parts.append(f"GRV:{grv.pattern_name} {grv.bpm:.0f}")
-    elif arp.enabled: parts.append(f"ARP:{arp.pattern_name} {arp.bpm:.0f}")
-    elif rhy.enabled: parts.append("PUMP" if rhy.is_pumping else "pump")
-    if dbg:
-        parts.append(f"C:{cap*1000:.0f} T:{trk*1000:.0f} P:{proc*1000:.0f}ms")
-        if lat > 0: parts.append(f"L:{lat:.0f}ms")
-    cv2.putText(frame, "  ".join(parts), (8, h-8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 170, 170), 1, cv2.LINE_AA)
 
 
 def _log(logger, action, m, v=100, lat=0):
