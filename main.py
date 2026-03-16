@@ -1,20 +1,13 @@
 """
-GestureChord v2 Phase 3 — Two-hand performance with expression control.
+GestureChord v2 — Two-hand gesture-to-MIDI chord controller.
 
-Right hand: finger count -> scale degree (1-5)
-Left hand:
-    Finger count -> chord modifier (7th, sus4, power, vi, +oct)
-    Y position -> MIDI CC for continuous effects control
-
-CC Expression:
-    Hand high = CC 127 (max effect)
-    Hand low = CC 0 (min effect)
-    Map to any FL Studio parameter via "Link to controller"
+All settings are loaded from config.yaml. Edit that file to customize.
+Delete config.yaml to regenerate defaults.
 
 Controls:
     ESC/Q=Quit  D=Debug  R=Reset  SPACE=Panic
-    K=Key  M=Major/Minor  UP/DOWN=Octave  T=Test
-    E=Toggle expression CC on/off
+    K=Key  M=Major/Minor  UP/DOWN=Octave
+    I=Inversion  E=Expression  T=Test
 """
 
 import sys
@@ -25,110 +18,75 @@ import cv2
 
 from vision.camera import Camera
 from vision.hand_tracker import HandTracker
-from vision.gesture_recognizer import GestureRecognizer, GestureResult
-from engine.state_machine import GestureStateMachine, EventType, State
-from engine.music_theory import MusicTheoryEngine, ChordInfo
-from engine.chord_mapper import ChordMapper, Modifier, MODIFIER_NAMES
+from vision.gesture_recognizer import GestureRecognizer
+from engine.state_machine import GestureStateMachine, EventType
+from engine.music_theory import MusicTheoryEngine
+from engine.chord_mapper import ChordMapper, Modifier
 from engine.expression import ExpressionController
 from midi.midi_output import MidiOutput
 from ui.overlay import Overlay, OverlayState
 from utils.logger import setup_logger
-
-
-# ── Config ──
-
-CAMERA_INDEX = 0
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
-
-MAX_HANDS = 2
-DETECTION_CONFIDENCE = 0.65
-TRACKING_CONFIDENCE = 0.55
-
-HYSTERESIS_HIGH = 0.55
-HYSTERESIS_LOW = 0.35
-ROLLING_WINDOW = 7
-
-CONFIRMATION_FRAMES = 5
-CHANGE_FRAMES = 4
-SETTLE_FRAMES = 3
-RELEASE_GRACE_MS = 250
-
-MODIFIER_SETTLE_FRAMES = 4
-
-DEFAULT_KEY = "C"
-DEFAULT_SCALE = "major"
-DEFAULT_OCTAVE = 4
-DEFAULT_VELOCITY = 100
-
-# Expression CC
-EXPRESSION_CC = 1            # CC 1 = Mod Wheel (most widely supported)
-EXPRESSION_ZONE_TOP = 0.15   # Hand at top of frame = CC 127
-EXPRESSION_ZONE_BOTTOM = 0.65  # Hand near zone line = CC 0
-EXPRESSION_SMOOTHING = 0.25  # EMA alpha (lower = smoother)
-EXPRESSION_DEAD_ZONE = 2.0   # Min CC change before sending
-
-MIDI_PORT_NAME = "GestureChord"
-MIDI_CHANNEL = 0
-
-WINDOW_NAME = "GestureChord v2"
-DISPLAY_SCALE = 1.5              # Scale up the window (1.0 = native 640x480, 1.5 = 960x720)
-PERFORMANCE_ZONE_THRESHOLD = 0.75
-HAND_LOST_RESET_FRAMES = 15
+from utils.config import load_config
 
 
 def main():
     logger = setup_logger(name="gesturechord", level=logging.INFO)
     logger.info("=" * 60)
-    logger.info("GestureChord v2 — Two-Hand Performance + Expression")
+    logger.info("GestureChord v2")
     logger.info("=" * 60)
 
-    # ── Components ──
-    camera = Camera(device_index=CAMERA_INDEX, width=CAMERA_WIDTH,
-                    height=CAMERA_HEIGHT, mirror=True)
+    # ── Load config ──
+    cfg = load_config()
 
-    tracker = HandTracker(max_hands=MAX_HANDS,
-                          detection_confidence=DETECTION_CONFIDENCE,
-                          tracking_confidence=TRACKING_CONFIDENCE,
-                          camera_mirrored=True)
+    # ── Build components from config ──
+    camera = Camera(
+        device_index=cfg.camera.index,
+        width=cfg.camera.width, height=cfg.camera.height, mirror=True)
 
-    right_recognizer = GestureRecognizer(
-        hysteresis_high=HYSTERESIS_HIGH, hysteresis_low=HYSTERESIS_LOW,
-        rolling_window=ROLLING_WINDOW)
-    left_recognizer = GestureRecognizer(
-        hysteresis_high=HYSTERESIS_HIGH, hysteresis_low=HYSTERESIS_LOW,
-        rolling_window=ROLLING_WINDOW)
+    tracker = HandTracker(
+        max_hands=cfg.tracking.max_hands,
+        detection_confidence=cfg.tracking.detection_confidence,
+        tracking_confidence=cfg.tracking.tracking_confidence,
+        camera_mirrored=True)
 
-    state_machine = GestureStateMachine(
-        confirmation_frames=CONFIRMATION_FRAMES, change_frames=CHANGE_FRAMES,
-        settle_frames=SETTLE_FRAMES, release_grace_ms=RELEASE_GRACE_MS,
+    right_rec = GestureRecognizer(
+        hysteresis_high=cfg.gesture.hysteresis_high,
+        hysteresis_low=cfg.gesture.hysteresis_low,
+        rolling_window=cfg.gesture.rolling_window)
+    left_rec = GestureRecognizer(
+        hysteresis_high=cfg.gesture.hysteresis_high,
+        hysteresis_low=cfg.gesture.hysteresis_low,
+        rolling_window=cfg.gesture.rolling_window)
+
+    sm = GestureStateMachine(
+        confirmation_frames=cfg.state_machine.confirmation_frames,
+        change_frames=cfg.state_machine.change_frames,
+        settle_frames=cfg.state_machine.settle_frames,
+        release_grace_ms=cfg.state_machine.release_grace_ms,
         idle_gesture=0)
 
-    music_engine = MusicTheoryEngine(
-        root=DEFAULT_KEY, scale=DEFAULT_SCALE,
-        octave=DEFAULT_OCTAVE, velocity=DEFAULT_VELOCITY)
+    me = MusicTheoryEngine(
+        root=cfg.music.key, scale=cfg.music.scale,
+        octave=cfg.music.octave, velocity=cfg.music.velocity)
 
-    chord_mapper = ChordMapper(
-        music_engine=music_engine, settle_frames=MODIFIER_SETTLE_FRAMES)
+    cm = ChordMapper(music_engine=me, settle_frames=cfg.modifier.settle_frames)
 
-    expression = ExpressionController(
-        cc_number=EXPRESSION_CC,
-        zone_top=EXPRESSION_ZONE_TOP,
-        zone_bottom=EXPRESSION_ZONE_BOTTOM,
-        smoothing_alpha=EXPRESSION_SMOOTHING,
-        dead_zone=EXPRESSION_DEAD_ZONE,
-        enabled=True)
+    expr = ExpressionController(
+        cc_number=cfg.expression.cc_number,
+        zone_top=cfg.expression.zone_top,
+        zone_bottom=cfg.expression.zone_bottom,
+        smoothing_alpha=cfg.expression.smoothing,
+        dead_zone=cfg.expression.dead_zone,
+        enabled=cfg.expression.enabled)
 
-    midi_out = MidiOutput(port_name=MIDI_PORT_NAME, channel=MIDI_CHANNEL)
-    overlay = Overlay(show_debug_info=False)  # Press D for debug mode
+    midi = MidiOutput(port_name=cfg.midi.port_name, channel=cfg.midi.channel)
+    ov = Overlay(show_debug_info=cfg.display.start_in_debug)
 
-    # ── State ──
-    right_frames_lost = 0
-    right_filters_reset = False
-    left_frames_lost = 0
-    left_filters_reset = False
-    current_mapped_chord = None
-    midi_available = False
+    # State
+    r_lost = 0; r_reset = False
+    l_lost = 0; l_reset = False
+    current_chord = None
+    midi_ok = False
 
     # ── Init ──
     if not camera.open():
@@ -136,21 +94,17 @@ def main():
         sys.exit(1)
 
     tracker.initialize()
-    midi_available = midi_out.open()
+    midi_ok = midi.open()
 
-    if not midi_available:
+    if not midi_ok:
         logger.warning("MIDI not available — PREVIEW MODE.")
     else:
         logger.info("MIDI ready!")
 
-    logger.info(f"Key: {music_engine.key_display} | Octave: {music_engine.octave}")
-    logger.info("Right hand: 1-5 fingers = I-V chord")
-    logger.info("Left hand: fingers=modifier, height=CC expression")
-    logger.info("  Modifiers: 0=triad 1=7th 2=sus4 3=9th 4=vi 5=vii")
-    logger.info("  Right thumb up = first inversion")
-    logger.info(f"  Expression: CC{EXPRESSION_CC} (hand height)")
-    logger.info("Controls: ESC=Quit SPACE=Panic K=Key M=Mode D=Debug T=Test R=Reset E=Expr I=Inversion")
-    _print_chord_map(logger, music_engine)
+    logger.info(f"Key: {me.key_display} | Oct: {me.octave} | Scale: {cfg.display.scale}x")
+    logger.info("Right hand: 1-5 = I-V | Left hand: 0=triad 1=7th 2=sus4 3=9th 4=vi 5=vii")
+    logger.info(f"Expression: CC{cfg.expression.cc_number} | I=Inversion | E=Expr toggle")
+    _print_chords(logger, me)
 
     # ===================================================================
     try:
@@ -162,223 +116,182 @@ def main():
 
             tracking = tracker.process_frame(frame)
 
-            # ── Right hand (chord degree) ──
-            right_gesture = None
-            right_finger_count = None
-            right_is_stable = False
-            right_in_zone = False
-
-            right_hand = tracking.get_right_hand()
-            if right_hand is not None and right_hand.wrist.y < PERFORMANCE_ZONE_THRESHOLD:
-                right_in_zone = True
-                right_gesture = right_recognizer.recognize(right_hand)
-                right_finger_count = right_gesture.finger_count
-                right_is_stable = right_gesture.is_stable
-                right_frames_lost = 0
-                right_filters_reset = False
+            # ── Right hand ──
+            rg = None; rc = None; rs = False; rz = False
+            rh = tracking.get_right_hand()
+            if rh and rh.wrist.y < cfg.zone.threshold:
+                rz = True
+                rg = right_rec.recognize(rh)
+                rc = rg.finger_count; rs = rg.is_stable
+                r_lost = 0; r_reset = False
             else:
-                right_frames_lost += 1
-                if right_frames_lost >= HAND_LOST_RESET_FRAMES and not right_filters_reset:
-                    right_recognizer.reset()
-                    right_filters_reset = True
+                r_lost += 1
+                if r_lost >= cfg.zone.hand_lost_frames and not r_reset:
+                    right_rec.reset(); r_reset = True
 
-            # ── Left hand (modifier + expression) ──
-            left_gesture = None
-            left_finger_count = None
-            left_in_zone = False
-            left_hand_y = None
-
-            left_hand = tracking.get_left_hand()
-            if left_hand is not None and left_hand.wrist.y < PERFORMANCE_ZONE_THRESHOLD:
-                left_in_zone = True
-                left_gesture = left_recognizer.recognize(left_hand)
-                left_finger_count = left_gesture.finger_count
-                left_hand_y = left_hand.wrist.y  # For expression CC
-                left_frames_lost = 0
-                left_filters_reset = False
+            # ── Left hand ──
+            lg = None; lc = None; lz = False; ly = None
+            lh = tracking.get_left_hand()
+            if lh and lh.wrist.y < cfg.zone.threshold:
+                lz = True
+                lg = left_rec.recognize(lh)
+                lc = lg.finger_count; ly = lh.wrist.y
+                l_lost = 0; l_reset = False
             else:
-                left_frames_lost += 1
-                if left_frames_lost >= HAND_LOST_RESET_FRAMES and not left_filters_reset:
-                    left_recognizer.reset()
-                    left_filters_reset = True
+                l_lost += 1
+                if l_lost >= cfg.zone.hand_lost_frames and not l_reset:
+                    left_rec.reset(); l_reset = True
 
-            # ── Update modifier ──
-            modifier_changed = chord_mapper.update_modifier(
-                left_finger_count if left_in_zone else None)
+            # ── Modifier + Expression ──
+            mod_changed = cm.update_modifier(lc if lz else None)
+            cc_val = expr.update(ly if lz else None)
+            if cc_val is not None and midi_ok:
+                midi.send_cc(expr.cc_number, cc_val)
 
-            # ── Update expression CC ──
-            cc_value = expression.update(left_hand_y if left_in_zone else None)
-            if cc_value is not None and midi_available:
-                midi_out.send_cc(expression.cc_number, cc_value)
+            # ── State machine ──
+            ev = sm.update(rc, rs)
 
-            # ── State machine (right hand) ──
-            event = state_machine.update(right_finger_count, right_is_stable)
+            # ── Chord events ──
+            triggered = False
 
-            # ── Handle chord events ──
-            chord_triggered = False
+            if ev.event_type == EventType.CHORD_ON:
+                m = cm.get_chord(ev.finger_count)
+                if m:
+                    if midi_ok: midi.play_chord(m.chord_info.midi_notes, m.chord_info.velocity)
+                    current_chord = m; triggered = True
+                    _log(logger, "ON", m)
 
-            if event.event_type == EventType.CHORD_ON:
-                mapped = chord_mapper.get_chord(event.finger_count)
-                if mapped:
-                    if midi_available:
-                        midi_out.play_chord(mapped.chord_info.midi_notes,
-                                            mapped.chord_info.velocity)
-                    current_mapped_chord = mapped
-                    chord_triggered = True
-                    _log_chord(logger, "ON", mapped)
+            elif ev.event_type == EventType.CHORD_CHANGE:
+                m = cm.get_chord(ev.finger_count)
+                if m:
+                    if midi_ok: midi.change_chord(m.chord_info.midi_notes, m.chord_info.velocity)
+                    current_chord = m; triggered = True
+                    _log(logger, "CHANGE", m)
 
-            elif event.event_type == EventType.CHORD_CHANGE:
-                mapped = chord_mapper.get_chord(event.finger_count)
-                if mapped:
-                    if midi_available:
-                        midi_out.change_chord(mapped.chord_info.midi_notes,
-                                              mapped.chord_info.velocity)
-                    current_mapped_chord = mapped
-                    chord_triggered = True
-                    _log_chord(logger, "CHANGE", mapped)
-
-            elif event.event_type == EventType.CHORD_OFF:
-                if midi_available:
-                    midi_out.stop_chord()
-                current_mapped_chord = None
+            elif ev.event_type == EventType.CHORD_OFF:
+                if midi_ok: midi.stop_chord()
+                current_chord = None
                 logger.info("CHORD OFF")
 
-            # ── Re-trigger on modifier change ──
-            if modifier_changed and not chord_triggered and state_machine.is_playing:
-                mapped = chord_mapper.get_chord(state_machine.active_finger_count)
-                if mapped:
-                    if midi_available:
-                        midi_out.change_chord(mapped.chord_info.midi_notes,
-                                              mapped.chord_info.velocity)
-                    current_mapped_chord = mapped
-                    _log_chord(logger, "MODIFIER", mapped)
+            # Re-trigger on modifier change
+            if mod_changed and not triggered and sm.is_playing:
+                m = cm.get_chord(sm.active_finger_count)
+                if m:
+                    if midi_ok: midi.change_chord(m.chord_info.midi_notes, m.chord_info.velocity)
+                    current_chord = m
+                    _log(logger, "MOD", m)
 
-            # ── Build overlay state and render ──
+            # ── Overlay ──
             os = OverlayState(
                 tracking=tracking,
-                right_gesture=right_gesture,
-                left_gesture=left_gesture,
-                right_in_zone=right_in_zone,
-                left_in_zone=left_in_zone,
-                chord_name=current_mapped_chord.display_name if current_mapped_chord else "",
-                roman=current_mapped_chord.chord_info.roman_numeral if current_mapped_chord else "",
-                notes=" ".join(current_mapped_chord.chord_info.note_names) if current_mapped_chord else "",
-                chord_state=event.state.name,
-                confirm_progress=event.confirmation_progress,
-                key_display=music_engine.key_display,
-                modifier_name=chord_mapper.active_modifier_name or "triad",
-                modifier_active=chord_mapper.active_modifier != Modifier.NONE,
-                inversion=chord_mapper.inversion,
-                cc_number=expression.cc_number,
-                cc_value=expression.cc_value,
-                cc_normalized=expression.cc_normalized,
-                cc_enabled=expression.enabled,
-                fps=camera.fps,
-                inference_ms=tracking.inference_time_ms,
-                midi_available=midi_available,
-                zone_threshold=PERFORMANCE_ZONE_THRESHOLD,
+                right_gesture=rg, left_gesture=lg,
+                right_in_zone=rz, left_in_zone=lz,
+                chord_name=current_chord.display_name if current_chord else "",
+                roman=current_chord.chord_info.roman_numeral if current_chord else "",
+                notes=" ".join(current_chord.chord_info.note_names) if current_chord else "",
+                chord_state=ev.state.name,
+                confirm_progress=ev.confirmation_progress,
+                key_display=me.key_display,
+                modifier_name=cm.active_modifier_name or "triad",
+                modifier_active=cm.active_modifier != Modifier.NONE,
+                inversion=cm.inversion,
+                cc_number=expr.cc_number, cc_value=expr.cc_value,
+                cc_normalized=expr.cc_normalized, cc_enabled=expr.enabled,
+                fps=camera.fps, inference_ms=tracking.inference_time_ms,
+                midi_available=midi_ok,
+                zone_threshold=cfg.zone.threshold,
             )
 
-            # Show pending chord during confirmation if nothing active
-            if not current_mapped_chord and right_finger_count and right_finger_count > 0:
-                if event.state.name in ("CONFIRMING", "CHANGING", "DETECTING"):
-                    pending = chord_mapper.get_chord(right_finger_count)
-                    if pending:
-                        os.chord_name = pending.display_name
-                        os.roman = pending.chord_info.roman_numeral
-                        os.notes = " ".join(pending.chord_info.note_names)
+            # Pending chord preview
+            if not current_chord and rc and rc > 0 and ev.state.name in ("CONFIRMING", "CHANGING", "DETECTING"):
+                p = cm.get_chord(rc)
+                if p:
+                    os.chord_name = p.display_name
+                    os.roman = p.chord_info.roman_numeral
+                    os.notes = " ".join(p.chord_info.note_names)
 
-            frame = overlay.draw(frame, os)
+            frame = ov.draw(frame, os)
 
-            # Scale up for larger display
-            if DISPLAY_SCALE != 1.0:
-                disp_w = int(frame.shape[1] * DISPLAY_SCALE)
-                disp_h = int(frame.shape[0] * DISPLAY_SCALE)
-                frame = cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+            # Scale display
+            if cfg.display.scale != 1.0:
+                dw = int(frame.shape[1] * cfg.display.scale)
+                dh = int(frame.shape[0] * cfg.display.scale)
+                frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
 
-            cv2.imshow(WINDOW_NAME, frame)
+            cv2.imshow(cfg.display.window_name, frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27 or key == ord("q"):
                 break
-            _handle_keyboard(key, logger, right_recognizer, left_recognizer,
-                             state_machine, music_engine, chord_mapper, expression,
-                             midi_out, midi_available, overlay)
+            _keys(key, logger, right_rec, left_rec, sm, me, cm, expr, midi, midi_ok, ov)
 
     except KeyboardInterrupt:
         pass
     finally:
-        if midi_available:
-            midi_out.close()
+        if midi_ok: midi.close()
         tracker.release()
         camera.release()
         cv2.destroyAllWindows()
 
 
-# ── Helpers ──
-
-def _log_chord(logger, action, mapped):
-    mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
-    notes = " ".join(mapped.chord_info.note_names)
-    logger.info(f"{action}: {mapped.display_name}{mod_str} [{notes}]")
+def _log(logger, action, m):
+    mod = f" [{m.modifier_name}]" if m.modifier_name else ""
+    logger.info(f"{action}: {m.display_name}{mod} [{' '.join(m.chord_info.note_names)}]")
 
 
-def _handle_keyboard(key, logger, r_rec, l_rec, sm, me, cm, expr, midi, midi_ok, ov):
+def _keys(key, log, rr, lr, sm, me, cm, ex, mi, mo, ov):
     if key == ord(" "):
-        sm.reset(); cm.reset(); expr.reset()
-        if midi_ok: midi.panic()
-        logger.info("PANIC")
+        sm.reset(); cm.reset(); ex.reset()
+        if mo: mi.panic()
+        log.info("PANIC")
     elif key == ord("r"):
-        r_rec.reset(); l_rec.reset(); sm.reset(); cm.reset(); expr.reset()
-        if midi_ok: midi.panic()
-        logger.info("Full reset")
+        rr.reset(); lr.reset(); sm.reset(); cm.reset(); ex.reset()
+        if mo: mi.panic()
+        log.info("Reset")
     elif key == ord("d"):
         ov.show_debug_info = not ov.show_debug_info
+        log.info(f"{'Debug' if ov.show_debug_info else 'Performance'} mode")
     elif key == ord("e"):
-        expr.enabled = not expr.enabled
-        logger.info(f"Expression CC: {'ON' if expr.enabled else 'OFF'}")
+        ex.enabled = not ex.enabled
+        log.info(f"Expression: {'ON' if ex.enabled else 'OFF'}")
     elif key == ord("i"):
         inv = cm.cycle_inversion()
-        inv_names = ["root position", "1st inversion", "2nd inversion"]
-        logger.info(f"Inversion: {inv_names[inv]}")
-        # Re-trigger current chord with new inversion if playing
-        if sm.is_playing and midi_ok:
-            mapped = cm.get_chord(sm.active_finger_count)
-            if mapped:
-                midi.change_chord(mapped.chord_info.midi_notes, mapped.chord_info.velocity)
-                logger.info(f"  -> {mapped.display_name} [{' '.join(mapped.chord_info.note_names)}]")
+        names = ["root", "1st inv", "2nd inv"]
+        log.info(f"Inversion: {names[inv]}")
+        if sm.is_playing and mo:
+            m = cm.get_chord(sm.active_finger_count)
+            if m: mi.change_chord(m.chord_info.midi_notes, m.chord_info.velocity)
     elif key == ord("k"):
         sm.reset(); cm.reset()
-        if midi_ok: midi.stop_chord()
+        if mo: mi.stop_chord()
         me.cycle_root(1)
-        logger.info(f"Key: {me.key_display}")
-        _print_chord_map(logger, me)
+        log.info(f"Key: {me.key_display}")
+        _print_chords(log, me)
     elif key == ord("m"):
         sm.reset(); cm.reset()
-        if midi_ok: midi.stop_chord()
+        if mo: mi.stop_chord()
         new = "natural_minor" if me.scale_name == "major" else "major"
         me.set_key(me.root, new)
-        logger.info(f"Scale: {me.key_display}")
-        _print_chord_map(logger, me)
+        log.info(f"Scale: {me.key_display}")
+        _print_chords(log, me)
     elif key == ord("t"):
-        if midi_ok: midi.send_test_note()
+        if mo: mi.send_test_note()
     elif key in (82, 0):
         sm.reset()
-        if midi_ok: midi.stop_chord()
+        if mo: mi.stop_chord()
         me.set_octave(me.octave + 1)
-        logger.info(f"Octave: {me.octave}")
+        log.info(f"Octave: {me.octave}")
     elif key in (84, 1):
         sm.reset()
-        if midi_ok: midi.stop_chord()
+        if mo: mi.stop_chord()
         me.set_octave(me.octave - 1)
-        logger.info(f"Octave: {me.octave}")
+        log.info(f"Octave: {me.octave}")
 
 
-def _print_chord_map(logger, me):
+def _print_chords(log, me):
     for d in range(1, 6):
         c = me.get_chord_for_degree(d)
-        if c:
-            logger.info(f"  {d}f = {c.roman_numeral} = {c.chord_name} [{' '.join(c.note_names)}]")
+        if c: log.info(f"  {d}f = {c.roman_numeral} {c.chord_name} [{' '.join(c.note_names)}]")
 
 
 if __name__ == "__main__":

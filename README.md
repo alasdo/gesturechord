@@ -124,6 +124,7 @@ Now that parameter follows your hand height. Works with any plugin parameter: fi
 ```
 gesturechord/
 ├── main.py                      # Main loop, two-hand pipeline
+├── config.yaml                  # All settings (edit to customize)
 ├── vision/
 │   ├── camera.py                # Webcam capture
 │   ├── hand_tracker.py          # MediaPipe HandLandmarker (2-hand)
@@ -139,10 +140,29 @@ gesturechord/
 │   └── overlay.py               # Visual feedback overlay
 └── utils/
     ├── filters.py               # Hysteresis, rolling mode, EMA
+    ├── config.py                # YAML config loader
     └── logger.py                # Structured logging
 ```
 
-Each module has a single responsibility. Vision knows nothing about music. Engine knows nothing about cameras. MIDI knows nothing about gestures.
+---
+
+## Configuration
+
+All settings live in `config.yaml`. Edit it to customize your setup — changes take effect on next launch. Delete the file to regenerate defaults.
+
+Key settings you might want to change:
+
+| Setting | What it does | Default |
+|---------|-------------|---------|
+| `music.key` | Root note | C |
+| `music.scale` | Scale type | major |
+| `music.octave` | Base octave | 4 |
+| `display.scale` | Window size multiplier | 1.5 |
+| `expression.cc_number` | Which CC to send | 1 (Mod Wheel) |
+| `expression.smoothing` | CC smoothness (lower = smoother) | 0.25 |
+| `state_machine.settle_frames` | Anti-cascade sensitivity | 3 |
+| `gesture.hysteresis_high` | Finger "up" threshold | 0.55 |
+| `zone.threshold` | Performance zone cutoff | 0.75 |
 
 ---
 

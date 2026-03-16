@@ -1,0 +1,67 @@
+# ═══════════════════════════════════════════════════════════
+# GestureChord Configuration
+# ═══════════════════════════════════════════════════════════
+# Edit this file to customize your setup.
+# Delete this file to regenerate defaults.
+# All changes take effect on next launch (no hot-reload).
+
+# ── Camera ──
+camera:
+  index: 0              # Camera device (0 = default, 1 = secondary)
+  width: 640            # Capture width (640 recommended)
+  height: 480           # Capture height (480 recommended)
+
+# ── Display ──
+display:
+  scale: 1.5            # Window scale (1.0 = 640x480, 1.5 = 960x720, 2.0 = 1280x960)
+  window_name: "GestureChord v2"
+  start_in_debug: false # true = start in debug mode, false = performance mode
+
+# ── Hand Tracking ──
+tracking:
+  max_hands: 2
+  detection_confidence: 0.65   # 0.0-1.0, higher = fewer false detections
+  tracking_confidence: 0.55    # 0.0-1.0, higher = more stable tracking
+
+# ── Gesture Recognition ──
+gesture:
+  hysteresis_high: 0.55  # Finger "up" threshold (ratio must exceed this)
+  hysteresis_low: 0.35   # Finger "down" threshold (ratio must drop below this)
+  rolling_window: 7      # Frames for smoothing finger count (~233ms at 30fps)
+
+# ── State Machine (debouncing) ──
+state_machine:
+  confirmation_frames: 5  # Frames to confirm new chord from idle (~167ms)
+  change_frames: 4        # Frames to confirm chord change (~133ms)
+  settle_frames: 3        # Frames count must be stable before confirming (~100ms)
+  release_grace_ms: 250   # Ms before note-off after hand loss
+
+# ── Left Hand Modifier ──
+modifier:
+  settle_frames: 4        # Frames for modifier debounce
+
+# ── Music ──
+music:
+  key: "C"                # Root note (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
+  scale: "major"          # Scale type (major, natural_minor, harmonic_minor, dorian, mixolydian)
+  octave: 4               # Base octave (3-6, where 4 = middle C region)
+  velocity: 100           # MIDI velocity (0-127, louder = higher)
+
+# ── Expression CC ──
+expression:
+  cc_number: 1            # MIDI CC number (1=Mod Wheel, 74=Cutoff, 11=Expression)
+  zone_top: 0.15          # Hand Y position for CC=127 (0.0 = top of frame)
+  zone_bottom: 0.65       # Hand Y position for CC=0
+  smoothing: 0.25         # EMA alpha (lower = smoother, 0.1-0.5)
+  dead_zone: 2.0          # Min CC change before sending (reduces jitter)
+  enabled: true           # Start with expression on/off
+
+# ── MIDI ──
+midi:
+  port_name: "GestureChord"  # Preferred port name (auto-detects loopBe/loopMIDI)
+  channel: 0                 # MIDI channel (0-15)
+
+# ── Performance Zone ──
+zone:
+  threshold: 0.75         # Hand must be above this Y fraction (0.0=top, 1.0=bottom)
+  hand_lost_frames: 15    # Frames before resetting filters after hand loss
