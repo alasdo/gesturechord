@@ -42,6 +42,10 @@ DEFAULTS = {
         "cc_number": 1, "zone_top": 0.15, "zone_bottom": 0.65,
         "smoothing": 0.25, "dead_zone": 2.0, "enabled": True,
     },
+    "expression2": {
+        "cc_number": 74, "zone_left": 0.15, "zone_right": 0.85,
+        "smoothing": 0.3, "dead_zone": 2.0, "enabled": False,
+    },
     "midi": {"port_name": "GestureChord", "channel": 0},
     "zone": {"threshold": 0.75, "hand_lost_frames": 15},
     "velocity": {
@@ -117,6 +121,15 @@ class ExpressionConfig:
     enabled: bool = True
 
 @dataclass
+class Expression2Config:
+    cc_number: int = 74
+    zone_left: float = 0.15
+    zone_right: float = 0.85
+    smoothing: float = 0.3
+    dead_zone: float = 2.0
+    enabled: bool = False
+
+@dataclass
 class MidiConfig:
     port_name: str = "GestureChord"
     channel: int = 0
@@ -170,6 +183,7 @@ class Config:
     modifier: ModifierConfig = field(default_factory=ModifierConfig)
     music: MusicConfig = field(default_factory=MusicConfig)
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
+    expression2: Expression2Config = field(default_factory=Expression2Config)
     midi: MidiConfig = field(default_factory=MidiConfig)
     zone: ZoneConfig = field(default_factory=ZoneConfig)
     velocity: VelocityConfig = field(default_factory=VelocityConfig)
@@ -200,6 +214,7 @@ def _dict_to_config(data: dict) -> Config:
         modifier=ModifierConfig(**data.get("modifier", {})),
         music=MusicConfig(**data.get("music", {})),
         expression=ExpressionConfig(**data.get("expression", {})),
+        expression2=Expression2Config(**data.get("expression2", {})),
         midi=MidiConfig(**data.get("midi", {})),
         zone=ZoneConfig(**data.get("zone", {})),
         velocity=VelocityConfig(**data.get("velocity", {})),

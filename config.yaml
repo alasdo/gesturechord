@@ -47,7 +47,7 @@ music:
   octave: 4               # Base octave (3-6, where 4 = middle C region)
   velocity: 100           # MIDI velocity (0-127, louder = higher)
 
-# ── Expression CC ──
+# ── Expression CC (Y-axis = hand height) ──
 expression:
   cc_number: 1            # MIDI CC number (1=Mod Wheel, 74=Cutoff, 11=Expression)
   zone_top: 0.15          # Hand Y position for CC=127 (0.0 = top of frame)
@@ -55,6 +55,15 @@ expression:
   smoothing: 0.25         # EMA alpha (lower = smoother, 0.1-0.5)
   dead_zone: 2.0          # Min CC change before sending (reduces jitter)
   enabled: true           # Start with expression on/off
+
+# ── Expression CC2 (X-axis = hand horizontal position) ──
+expression2:
+  cc_number: 74           # CC74 = Brightness/Cutoff (common for filters)
+  zone_left: 0.15         # Hand X position for CC=0 (left side of frame)
+  zone_right: 0.85        # Hand X position for CC=127 (right side)
+  smoothing: 0.3          # Slightly more smoothing than Y (X is noisier)
+  dead_zone: 2.0
+  enabled: false          # Off by default (toggle with W key)
 
 # ── MIDI ──
 midi:

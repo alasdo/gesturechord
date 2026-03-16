@@ -106,6 +106,10 @@ class OverlayState:
     cc_value: int = 0
     cc_normalized: float = 0.0
     cc_enabled: bool = True
+    cc2_number: int = 74
+    cc2_value: int = 0
+    cc2_normalized: float = 0.0
+    cc2_enabled: bool = False
     fps: float = 0.0
     inference_ms: float = 0.0
     midi_available: bool = True
@@ -310,26 +314,43 @@ class Overlay:
 
     def _draw_cc_bar(self, frame, s, w):
         x0, y0 = w - 120, 118
-        bw, bh = 112, 38
-        cv2.rectangle(frame, (x0, y0), (x0+bw, y0+bh), BG, -1)
+        bw = 112
 
+        # CC1 (Y-axis)
+        bh1 = 30
+        cv2.rectangle(frame, (x0, y0), (x0+bw, y0+bh1), BG, -1)
         hdr_color = TEAL if s.cc_enabled else DIM
-        cv2.putText(frame, f"CC{s.cc_number}", (x0+4, y0+13),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, hdr_color, 1)
-        cv2.putText(frame, str(s.cc_value), (x0+82, y0+13),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, WHITE if s.cc_enabled else DIM, 1)
-
-        # Fill bar
-        bx, by = x0+4, y0+18
-        bar_w, bar_h = bw-8, 8
+        cv2.putText(frame, f"CC{s.cc_number}", (x0+4, y0+12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, hdr_color, 1)
+        cv2.putText(frame, str(s.cc_value), (x0+82, y0+12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, WHITE if s.cc_enabled else DIM, 1)
+        bx, by = x0+4, y0+16
+        bar_w, bar_h = bw-8, 7
         cv2.rectangle(frame, (bx, by), (bx+bar_w, by+bar_h), (35, 35, 35), -1)
         if s.cc_enabled and s.cc_normalized > 0:
             fill = int(bar_w * s.cc_normalized)
             g = int(150 + 80 * s.cc_normalized)
             cv2.rectangle(frame, (bx, by), (bx+fill, by+bar_h), (170, g, 0), -1)
         cv2.rectangle(frame, (bx, by), (bx+bar_w, by+bar_h), BORDER, 1)
+        cv2.rectangle(frame, (x0, y0), (x0+bw, y0+bh1), BORDER, 1)
 
-        cv2.rectangle(frame, (x0, y0), (x0+bw, y0+bh), BORDER, 1)
+        # CC2 (X-axis) — only drawn when enabled
+        if s.cc2_enabled:
+            y1 = y0 + bh1 + 2
+            bh2 = 30
+            cv2.rectangle(frame, (x0, y1), (x0+bw, y1+bh2), BG, -1)
+            hdr2 = ACCENT
+            cv2.putText(frame, f"CC{s.cc2_number} X", (x0+4, y1+12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, hdr2, 1)
+            cv2.putText(frame, str(s.cc2_value), (x0+82, y1+12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, WHITE, 1)
+            bx2, by2 = x0+4, y1+16
+            cv2.rectangle(frame, (bx2, by2), (bx2+bar_w, by2+bar_h), (35, 35, 35), -1)
+            if s.cc2_normalized > 0:
+                fill2 = int(bar_w * s.cc2_normalized)
+                cv2.rectangle(frame, (bx2, by2), (bx2+fill2, by2+bar_h), ACCENT, -1)
+            cv2.rectangle(frame, (bx2, by2), (bx2+bar_w, by2+bar_h), BORDER, 1)
+            cv2.rectangle(frame, (x0, y1), (x0+bw, y1+bh2), BORDER, 1)
 
     # ═══════════════════════════════════════════════════════════
     # Rhythm Bar (above chord panel — shows active rhythm mode)

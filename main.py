@@ -70,7 +70,15 @@ def main():
                                 zone_bottom=cfg.expression.zone_bottom,
                                 smoothing_alpha=cfg.expression.smoothing,
                                 dead_zone=cfg.expression.dead_zone,
-                                enabled=cfg.expression.enabled)
+                                enabled=cfg.expression.enabled,
+                                invert=True)  # Y axis: high = max
+    expr2 = ExpressionController(cc_number=cfg.expression2.cc_number,
+                                 zone_top=cfg.expression2.zone_left,
+                                 zone_bottom=cfg.expression2.zone_right,
+                                 smoothing_alpha=cfg.expression2.smoothing,
+                                 dead_zone=cfg.expression2.dead_zone,
+                                 enabled=cfg.expression2.enabled,
+                                 invert=False)  # X axis: right = max
     vel = VelocityController(min_velocity=cfg.velocity.min_velocity,
                              max_velocity=cfg.velocity.max_velocity,
                              speed_low=cfg.velocity.speed_low,
@@ -128,7 +136,7 @@ def main():
                 f"Groove: {'OFF' if not groove.enabled else groove.pattern_name + ' ' + str(int(groove.bpm)) + 'bpm'} | "
                 f"Arp: {'OFF' if not arp.enabled else arp.pattern_name}")
     logger.info("Keys: R=Pump G=Groove F=GroovePattern A=Arp P=ArpPattern []=BPM")
-    logger.info("      K=Key M=Mode S=Scale +/-=Oct I=Inv E=Expr V=Vel D=Debug X=Reset")
+    logger.info("      K=Key M=Mode S=Scale +/-=Oct I=Inv E=CC1(Y) W=CC2(X) V=Vel D=Debug")
     _print_chords(logger, me)
 
     # ===================================================================
@@ -159,22 +167,25 @@ def main():
                     right_rec.reset(); r_reset = True
 
             # ── Left hand ──
-            lg = None; lc = None; lz = False; ly = None
+            lg = None; lc = None; lz = False; ly = None; lx = None
             lh = tracking.get_left_hand()
             if lh and lh.wrist.y < cfg.zone.threshold:
                 lz = True; lg = left_rec.recognize(lh)
-                lc = lg.finger_count; ly = lh.wrist.y
+                lc = lg.finger_count; ly = lh.wrist.y; lx = lh.wrist.x
                 l_lost = 0; l_reset = False
             else:
                 l_lost += 1
                 if l_lost >= cfg.zone.hand_lost_frames and not l_reset:
                     left_rec.reset(); l_reset = True
 
-            # ── Modifier + Expression ──
+            # ── Modifier + Expression (Y + X) ──
             mod_changed = cm.update_modifier(lc if lz else None)
             cc_val = expr.update(ly if lz else None)
             if cc_val is not None and midi_ok:
                 midi.send_cc(expr.cc_number, cc_val)
+            cc2_val = expr2.update(lx if lz else None)
+            if cc2_val is not None and midi_ok:
+                midi.send_cc(expr2.cc_number, cc2_val)
 
             # ── State machine ──
             ev = sm.update(rc, rs)
@@ -271,6 +282,8 @@ def main():
                 inversion=cm.inversion,
                 cc_number=expr.cc_number, cc_value=expr.cc_value,
                 cc_normalized=expr.cc_normalized, cc_enabled=expr.enabled,
+                cc2_number=expr2.cc_number, cc2_value=expr2.cc_value,
+                cc2_normalized=expr2.cc_normalized, cc2_enabled=expr2.enabled,
                 fps=camera.fps, inference_ms=tracking.inference_time_ms,
                 midi_available=midi_ok, zone_threshold=cfg.zone.threshold,
                 # Rhythm features
@@ -319,7 +332,7 @@ def main():
             key = cv2.waitKeyEx(1)
             if key == 27 or key == ord("q"): break
             _keys(key, logger, right_rec, left_rec, sm, me, cm, expr,
-                  vel, arp, rhythm, groove, midi, midi_ok, ov)
+                  expr2, vel, arp, rhythm, groove, midi, midi_ok, ov)
 
     except KeyboardInterrupt:
         pass
@@ -336,14 +349,14 @@ def _log(logger, action, m, v=100, lat=0):
                 + (f" ({lat:.0f}ms)" if lat else ""))
 
 
-def _keys(key, log, rr, lr, sm, me, cm, ex, vel, arp, rhy, grv, mi, mo, ov):
+def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov):
     if key == ord(" "):
-        sm.reset(); cm.reset(); ex.reset(); vel.reset()
+        sm.reset(); cm.reset(); ex.reset(); ex2.reset(); vel.reset()
         arp.stop(); rhy.reset(); grv.stop()
         if mo: mi.panic()
         log.info("PANIC")
     elif key == ord("x"):
-        rr.reset(); lr.reset(); sm.reset(); cm.reset(); ex.reset()
+        rr.reset(); lr.reset(); sm.reset(); cm.reset(); ex.reset(); ex2.reset()
         vel.reset(); arp.stop(); rhy.reset(); grv.stop()
         if mo: mi.panic()
         log.info("Full reset")
@@ -394,7 +407,10 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, vel, arp, rhy, grv, mi, mo, ov):
         ov.show_debug_info = not ov.show_debug_info
     elif key == ord("e"):
         ex.enabled = not ex.enabled
-        log.info(f"Expression: {'ON' if ex.enabled else 'OFF'}")
+        log.info(f"Expression CC{ex.cc_number}: {'ON' if ex.enabled else 'OFF'}")
+    elif key == ord("w"):
+        ex2.enabled = not ex2.enabled
+        log.info(f"Expression2 CC{ex2.cc_number} (X-axis): {'ON' if ex2.enabled else 'OFF'}")
     elif key == ord("v"):
         vel.enabled = not vel.enabled
         log.info(f"Velocity: {'ON' if vel.enabled else 'OFF'}")

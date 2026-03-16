@@ -57,18 +57,21 @@ class ExpressionController:
         smoothing_alpha: float = 0.25,
         dead_zone: float = 2.0,
         enabled: bool = True,
+        invert: bool = True,
     ):
         self.cc_number = cc_number
         self.zone_top = zone_top
         self.zone_bottom = zone_bottom
         self.enabled = enabled
+        self.invert = invert
 
         self._ema = ExponentialMovingAverage(alpha=smoothing_alpha, dead_zone=dead_zone)
         self._last_cc_value: int = 0
         self._current_cc_value: int = 0
 
+        axis = "Y(inv)" if invert else "X"
         logger.info(
-            f"ExpressionController: CC{cc_number}, "
+            f"ExpressionController: CC{cc_number} {axis}, "
             f"zone=[{zone_top:.2f}-{zone_bottom:.2f}], "
             f"alpha={smoothing_alpha}, dead_zone={dead_zone}"
         )
@@ -83,29 +86,31 @@ class ExpressionController:
         """Current CC as 0.0-1.0 for UI display."""
         return self._current_cc_value / 127.0
 
-    def update(self, hand_y: Optional[float]) -> Optional[int]:
+    def update(self, hand_pos: Optional[float]) -> Optional[int]:
         """
         Process one frame of hand position data.
 
         Args:
-            hand_y: Normalized Y position of the left hand wrist (0.0=top, 1.0=bottom).
-                None if no left hand detected.
+            hand_pos: Normalized position (0.0-1.0). For Y: 0=top, 1=bottom.
+                For X: 0=left, 1=right. None if no hand detected.
 
         Returns:
             CC value (0-127) if it changed, None if no update needed.
         """
-        if not self.enabled or hand_y is None:
+        if not self.enabled or hand_pos is None:
             return None
 
-        # Map Y position to 0-127
-        # hand_y = zone_top → CC 127 (hand high = max)
-        # hand_y = zone_bottom → CC 0 (hand low = min)
         range_size = self.zone_bottom - self.zone_top
         if range_size < 0.01:
             return None
 
-        normalized = 1.0 - ((hand_y - self.zone_top) / range_size)
+        normalized = (hand_pos - self.zone_top) / range_size
         normalized = max(0.0, min(1.0, normalized))
+
+        # Invert: Y axis (hand high = max), don't invert: X axis (hand right = max)
+        if self.invert:
+            normalized = 1.0 - normalized
+
         raw_cc = normalized * 127.0
 
         # Smooth
