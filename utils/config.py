@@ -56,6 +56,10 @@ DEFAULTS = {
         "smoothing": 0.5, "min_velocity": 45, "max_velocity": 120,
         "speed_for_max": 0.045,
     },
+    "groove": {
+        "enabled": False, "bpm": 120.0, "pattern": "four_floor",
+        "gate_length": 0.85, "humanize_ms": 10.0,
+    },
 }
 
 
@@ -148,6 +152,14 @@ class RhythmConfig:
     speed_for_max: float = 0.045
 
 @dataclass
+class GrooveConfig:
+    enabled: bool = False
+    bpm: float = 120.0
+    pattern: str = "four_floor"
+    gate_length: float = 0.85
+    humanize_ms: float = 10.0
+
+@dataclass
 class Config:
     """Top-level config with typed sections."""
     camera: CameraConfig = field(default_factory=CameraConfig)
@@ -163,6 +175,7 @@ class Config:
     velocity: VelocityConfig = field(default_factory=VelocityConfig)
     arpeggiator: ArpeggiatorConfig = field(default_factory=ArpeggiatorConfig)
     rhythm: RhythmConfig = field(default_factory=RhythmConfig)
+    groove: GrooveConfig = field(default_factory=GrooveConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -192,6 +205,7 @@ def _dict_to_config(data: dict) -> Config:
         velocity=VelocityConfig(**data.get("velocity", {})),
         arpeggiator=ArpeggiatorConfig(**data.get("arpeggiator", {})),
         rhythm=RhythmConfig(**data.get("rhythm", {})),
+        groove=GrooveConfig(**data.get("groove", {})),
     )
 
 

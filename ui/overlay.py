@@ -153,12 +153,8 @@ class Overlay:
         px = (w - pw) // 2
         py = h - ph - 8
 
-        # Background with slight transparency effect
-        overlay_region = frame[py:py+ph, px:px+pw].copy()
+        # Opaque background (much faster than semi-transparent blend)
         cv2.rectangle(frame, (px, py), (px+pw, py+ph), C_BG, -1)
-        # Blend for semi-transparency
-        cv2.addWeighted(overlay_region, 0.2, frame[py:py+ph, px:px+pw], 0.8, 0,
-                        frame[py:py+ph, px:px+pw])
 
         # Border color based on state
         if s.chord_state == "ACTIVE":

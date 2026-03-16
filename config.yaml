@@ -90,3 +90,11 @@ rhythm:
   min_velocity: 45        # MIDI velocity for gentle pumps
   max_velocity: 120       # MIDI velocity for hard pumps
   speed_for_max: 0.045    # Speed that maps to max velocity
+
+# ── Groove (automatic rhythm patterns) ──
+groove:
+  enabled: false          # Start with groove off (toggle with G key)
+  bpm: 120                # Tempo (40-300)
+  pattern: "four_floor"   # four_floor, syncopated, trap, half_time, offbeat, waltz, shuffle, sparse
+  gate_length: 0.85       # How long notes ring per hit (0.5=staccato, 0.85=legato, 1.0=fully sustained)
+  humanize_ms: 10         # Micro-timing variation in ms (0 = robotic, 15 = loose)

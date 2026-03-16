@@ -381,8 +381,8 @@ class HandTracker:
         start = time.perf_counter()
         h, w, _ = frame_bgr.shape
 
-        # Convert BGR → RGB for MediaPipe
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        # Convert BGR → RGB using numpy slice (faster than cvtColor for this case)
+        frame_rgb = frame_bgr[:, :, ::-1].copy()
 
         # Create MediaPipe Image wrapper
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
