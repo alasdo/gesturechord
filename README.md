@@ -19,14 +19,21 @@ Use your webcam as a musical instrument. Your right hand selects chords by holdi
 | Fist | Silence |
 
 ### Left Hand — Chord Modifiers
-| Fingers | Modifier | Example (Key of C, Right=1) |
-|---------|----------|----------------------------|
-| 0 / absent | Basic triad | C major (C E G) |
-| 1 | Add 7th | Cmaj7 (C E G B) |
-| 2 | Suspended 4th | Csus4 (C F G) |
-| 3 | 9th chord | Cmaj9 (C E G B D) |
-| 4 | vi chord | Am (A C E) |
-| 5 | vii° chord | Bdim (B D F) |
+| Fingers | Modifier | Right 1-5 maps to |
+|---------|----------|-------------------|
+| 0 / absent | Basic triad | I, ii, iii, IV, V |
+| 1 | 7th chord | I7, ii7, iii7, IV7, V7 |
+| 2 | Suspended 4th | Isus4, iisus4, etc. |
+| 3 | 9th chord | Imaj9, iim9, etc. |
+| 4 | **SHIFT** | vi, vii°, I+, ii+, iii+ |
+| 5 | **SHIFT + 7th** | vi7, vii°7, I+7, ii+7, iii+7 |
+
+SHIFT mode remaps the right hand to upper degrees, giving you all 7 scale degrees. Right 3-5 in shift mode play degrees I-III one octave higher.
+
+### Available Scales
+Press **S** to cycle through scales, **M** to toggle major/minor:
+
+major, natural minor, harmonic minor, melodic minor, dorian, phrygian, lydian, mixolydian, locrian, pentatonic major, pentatonic minor, blues, phrygian dominant, hungarian minor, whole tone, chromatic
 
 ### Inversions (Keyboard Toggle)
 Press **I** to cycle through voicings:
@@ -46,13 +53,26 @@ Your left hand's height in the frame sends continuous MIDI CC data:
 - Smoothed to eliminate jitter
 - Map to any FL Studio parameter (filter, reverb, delay, etc.)
 
+### Dynamic Velocity
+Hand movement speed controls how loud chords play:
+- **Fast gesture** = high velocity (loud, punchy)
+- **Slow/still gesture** = low velocity (soft, subtle)
+- Toggle with **V** key
+
+### Arpeggiator
+Instead of block chords, play notes one at a time in sequence:
+- Toggle with **A** key
+- **P** = cycle pattern (up, down, up-down, random)
+- **[** / **]** = decrease / increase BPM
+- Configurable in config.yaml (bpm, pattern, octave range)
+
 ### Other Features
 - Performance zone — hand must be in upper 75% of frame to trigger
 - Settle-then-confirm debouncing — prevents cascade triggers (1→2→3)
 - Fist = instant silence (no confirmation delay)
 - Smart left/right hand identification using position + labels
 - Independent gesture filters per hand
-- Visual overlay with chord display, hand badges, modifier status, CC bar
+- Performance mode / debug mode overlay (D to toggle)
 
 ---
 
@@ -98,9 +118,14 @@ The model file (`hand_landmarker.task`, ~12 MB) downloads automatically on first
 | SPACE | Panic — stop all MIDI notes |
 | K | Cycle key root (C → C# → D → ...) |
 | M | Toggle major / natural minor |
+| S | Cycle through all scales |
 | UP / DOWN | Octave up / down |
 | D | Toggle debug overlay |
 | E | Toggle expression CC on/off |
+| V | Toggle dynamic velocity on/off |
+| A | Toggle arpeggiator on/off |
+| P | Cycle arp pattern (up/down/up-down/random) |
+| [ / ] | Arp BPM down / up (±20) |
 | I | Cycle inversion (root → 1st → 2nd → root) |
 | T | Send test note (verify MIDI routing) |
 | R | Full reset (filters + state + MIDI) |

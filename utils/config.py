@@ -44,6 +44,13 @@ DEFAULTS = {
     },
     "midi": {"port_name": "GestureChord", "channel": 0},
     "zone": {"threshold": 0.75, "hand_lost_frames": 15},
+    "velocity": {
+        "enabled": True, "min_velocity": 50, "max_velocity": 120,
+        "speed_low": 0.003, "speed_high": 0.04,
+    },
+    "arpeggiator": {
+        "enabled": False, "bpm": 160.0, "pattern": "up", "octave_range": 1,
+    },
 }
 
 
@@ -111,6 +118,21 @@ class ZoneConfig:
     hand_lost_frames: int = 15
 
 @dataclass
+class VelocityConfig:
+    enabled: bool = True
+    min_velocity: int = 50
+    max_velocity: int = 120
+    speed_low: float = 0.003
+    speed_high: float = 0.04
+
+@dataclass
+class ArpeggiatorConfig:
+    enabled: bool = False
+    bpm: float = 160.0
+    pattern: str = "up"
+    octave_range: int = 1
+
+@dataclass
 class Config:
     """Top-level config with typed sections."""
     camera: CameraConfig = field(default_factory=CameraConfig)
@@ -123,6 +145,8 @@ class Config:
     expression: ExpressionConfig = field(default_factory=ExpressionConfig)
     midi: MidiConfig = field(default_factory=MidiConfig)
     zone: ZoneConfig = field(default_factory=ZoneConfig)
+    velocity: VelocityConfig = field(default_factory=VelocityConfig)
+    arpeggiator: ArpeggiatorConfig = field(default_factory=ArpeggiatorConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -149,6 +173,8 @@ def _dict_to_config(data: dict) -> Config:
         expression=ExpressionConfig(**data.get("expression", {})),
         midi=MidiConfig(**data.get("midi", {})),
         zone=ZoneConfig(**data.get("zone", {})),
+        velocity=VelocityConfig(**data.get("velocity", {})),
+        arpeggiator=ArpeggiatorConfig(**data.get("arpeggiator", {})),
     )
 
 

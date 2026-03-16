@@ -65,3 +65,18 @@ midi:
 zone:
   threshold: 0.75         # Hand must be above this Y fraction (0.0=top, 1.0=bottom)
   hand_lost_frames: 15    # Frames before resetting filters after hand loss
+
+# ── Velocity (dynamic from hand speed) ──
+velocity:
+  enabled: true           # true = velocity from hand speed, false = fixed velocity
+  min_velocity: 50        # Velocity for still/slow hand (0-127)
+  max_velocity: 120       # Velocity for fast hand movement (0-127)
+  speed_low: 0.003        # Normalized speed = min velocity
+  speed_high: 0.04        # Normalized speed = max velocity
+
+# ── Arpeggiator ──
+arpeggiator:
+  enabled: false          # Start with arp off (toggle with A key)
+  bpm: 160                # Notes per minute (40-480)
+  pattern: "up"           # up, down, up_down, random
+  octave_range: 1         # 1 = chord notes only, 2 = +1 octave

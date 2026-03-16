@@ -47,14 +47,31 @@ NOTE_TO_SEMITONE.update({
 # Index 0 = root (always 0), index 1 = 2nd degree, etc.
 
 SCALES: Dict[str, List[int]] = {
+    # Standard major/minor
     "major":            [0, 2, 4, 5, 7, 9, 11],
     "natural_minor":    [0, 2, 3, 5, 7, 8, 10],
     "harmonic_minor":   [0, 2, 3, 5, 7, 8, 11],
     "melodic_minor":    [0, 2, 3, 5, 7, 9, 11],
-    "dorian":           [0, 2, 3, 5, 7, 9, 10],
-    "mixolydian":       [0, 2, 4, 5, 7, 9, 10],
+
+    # Modes (every mode of the major scale)
+    "dorian":           [0, 2, 3, 5, 7, 9, 10],  # minor with raised 6th — neo-soul, jazz
+    "phrygian":         [0, 1, 3, 5, 7, 8, 10],  # dark, Spanish feel — flamenco, metal
+    "lydian":           [0, 2, 4, 6, 7, 9, 11],  # dreamy, bright — film scores, shoegaze
+    "mixolydian":       [0, 2, 4, 5, 7, 9, 10],  # bluesy major — rock, funk, blues
+    "locrian":          [0, 1, 3, 5, 6, 8, 10],  # very dark, unstable — experimental, metal
+
+    # Pentatonic (5 notes — no awkward scale degrees)
     "pentatonic_major": [0, 2, 4, 7, 9],
     "pentatonic_minor": [0, 3, 5, 7, 10],
+
+    # Blues
+    "blues":            [0, 3, 5, 6, 7, 10],     # minor pentatonic + blue note
+
+    # Exotic / world
+    "phrygian_dominant":[0, 1, 4, 5, 7, 8, 10],  # Middle Eastern / Jewish — "Hava Nagila" scale
+    "hungarian_minor":  [0, 2, 3, 6, 7, 8, 11],  # dramatic, cinematic
+    "whole_tone":       [0, 2, 4, 6, 8, 10],     # dreamy, floating — Debussy, game music
+    "chromatic":        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # all 12 notes
 }
 
 
@@ -121,6 +138,15 @@ DIATONIC_QUALITIES: Dict[str, List[ChordQuality]] = {
         ChordQuality.MAJOR,       # VI
         ChordQuality.DIMINISHED,  # vii°
     ],
+    "melodic_minor": [
+        ChordQuality.MINOR,       # i
+        ChordQuality.MINOR,       # ii
+        ChordQuality.AUGMENTED,   # III+
+        ChordQuality.MAJOR,       # IV
+        ChordQuality.MAJOR,       # V
+        ChordQuality.DIMINISHED,  # vi°
+        ChordQuality.DIMINISHED,  # vii°
+    ],
     "dorian": [
         ChordQuality.MINOR,       # i
         ChordQuality.MINOR,       # ii
@@ -130,6 +156,24 @@ DIATONIC_QUALITIES: Dict[str, List[ChordQuality]] = {
         ChordQuality.DIMINISHED,  # vi°
         ChordQuality.MAJOR,       # VII
     ],
+    "phrygian": [
+        ChordQuality.MINOR,       # i
+        ChordQuality.MAJOR,       # II
+        ChordQuality.MAJOR,       # III
+        ChordQuality.MINOR,       # iv
+        ChordQuality.DIMINISHED,  # v°
+        ChordQuality.MAJOR,       # VI
+        ChordQuality.MINOR,       # vii
+    ],
+    "lydian": [
+        ChordQuality.MAJOR,       # I
+        ChordQuality.MAJOR,       # II
+        ChordQuality.MINOR,       # iii
+        ChordQuality.DIMINISHED,  # iv°
+        ChordQuality.MAJOR,       # V
+        ChordQuality.MINOR,       # vi
+        ChordQuality.MINOR,       # vii
+    ],
     "mixolydian": [
         ChordQuality.MAJOR,       # I
         ChordQuality.MINOR,       # ii
@@ -138,6 +182,33 @@ DIATONIC_QUALITIES: Dict[str, List[ChordQuality]] = {
         ChordQuality.MINOR,       # v
         ChordQuality.MINOR,       # vi
         ChordQuality.MAJOR,       # VII
+    ],
+    "locrian": [
+        ChordQuality.DIMINISHED,  # i°
+        ChordQuality.MAJOR,       # II
+        ChordQuality.MINOR,       # iii
+        ChordQuality.MINOR,       # iv
+        ChordQuality.MAJOR,       # V
+        ChordQuality.MAJOR,       # VI
+        ChordQuality.MINOR,       # vii
+    ],
+    "phrygian_dominant": [
+        ChordQuality.MAJOR,       # I (dominant sound)
+        ChordQuality.MINOR,       # ii
+        ChordQuality.DIMINISHED,  # iii°
+        ChordQuality.MINOR,       # iv
+        ChordQuality.DIMINISHED,  # v°
+        ChordQuality.MAJOR,       # VI
+        ChordQuality.MINOR,       # vii
+    ],
+    "hungarian_minor": [
+        ChordQuality.MINOR,       # i
+        ChordQuality.DIMINISHED,  # ii°
+        ChordQuality.AUGMENTED,   # III+
+        ChordQuality.MINOR,       # iv
+        ChordQuality.MAJOR,       # V
+        ChordQuality.MAJOR,       # VI
+        ChordQuality.DIMINISHED,  # vii°
     ],
 }
 
