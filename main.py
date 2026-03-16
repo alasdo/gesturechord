@@ -267,7 +267,7 @@ def main():
 
             cv2.imshow(cfg.display.window_name, frame)
 
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKeyEx(1)  # waitKeyEx returns full key codes including arrows
             if key == 27 or key == ord("q"):
                 break
             _keys(key, logger, right_rec, left_rec, sm, me, cm, expr, vel, arp, midi, midi_ok, ov)
@@ -364,16 +364,16 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, vel, arp, mi, mo, ov):
         _print_chords(log, me)
     elif key == ord("t"):
         if mo: mi.send_test_note()
-    elif key in (82, 0):
+    elif key in (2490368, 82, 0, 72, ord("="), ord("+")):  # UP arrow / + / =
         sm.reset()
         if mo: mi.stop_chord()
         me.set_octave(me.octave + 1)
-        log.info(f"Octave: {me.octave}")
-    elif key in (84, 1):
+        log.info(f"Octave UP: {me.octave}")
+    elif key in (2621440, 84, 1, 80, ord("-"), ord("_")):  # DOWN arrow / - / _
         sm.reset()
         if mo: mi.stop_chord()
         me.set_octave(me.octave - 1)
-        log.info(f"Octave: {me.octave}")
+        log.info(f"Octave DOWN: {me.octave}")
 
 
 def _print_chords(log, me):
