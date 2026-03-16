@@ -1,472 +1,377 @@
 """
-Visual feedback overlay on the camera frame.
+Visual overlay v2 — clean performance mode + debug mode.
 
-Design philosophy:
-    The overlay must communicate three things at a glance:
-    1. Is the system tracking my hand? (landmark visualization)
-    2. What gesture does it think I'm making? (finger count display)
-    3. How confident/stable is the detection? (confidence bar, stability indicator)
+Performance mode (default): shows only what a performer needs to glance at.
+Debug mode (press D): adds hand skeletons, finger ratios, FPS, raw counts.
 
-    Keep it visually clean — this runs in a window alongside FL Studio,
-    so it should be compact and not distracting. Dark theme with bright
-    accent colors for visibility.
-
-Color scheme:
-    - Hand landmarks: cyan connections, bright dots at joints
-    - Finger count: large white text, top-left
-    - Confidence: color-coded bar (red < yellow < green)
-    - Status messages: color-coded (green = active, yellow = detecting, gray = idle)
-    - FPS: small text, bottom-right (for performance monitoring)
+Layout (performance mode):
+    ┌─────────────────────────────────────────────┐
+    │                                   [R:3][L:1]│
+    │                                   [MOD:7th ]│
+    │                                   [INV:root]│
+    │                                   [CC1  85 ]│
+    │              (hands here)         [████░░░░]│
+    │                                             │
+    │────────────── zone line ────────────────────│
+    │        ┌─────────────────────┐              │
+    │        │Key: C major         │              │
+    │        │ I    C major        │              │
+    │        │      C E G          │              │
+    │        │[████████████████░░░]│              │
+    │        └─────────────────────┘              │
+    └─────────────────────────────────────────────┘
 """
-
-import logging
-from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+from typing import Optional, List
+from dataclasses import dataclass
 
 from vision.hand_tracker import HandData, LandmarkIndex, TrackingResult
 from vision.gesture_recognizer import GestureResult
 
 
-logger = logging.getLogger("gesturechord.ui.overlay")
+# ── Colors (BGR) ──
+C_BG = (20, 20, 20)
+C_BG_ALPHA = (30, 30, 30)
+C_BORDER = (70, 70, 70)
+C_WHITE = (255, 255, 255)
+C_GRAY = (140, 140, 140)
+C_DARK_GRAY = (80, 80, 80)
+C_GREEN = (0, 210, 0)
+C_YELLOW = (0, 210, 255)
+C_RED = (0, 0, 210)
+C_CYAN = (255, 220, 0)
+C_TEAL = (200, 200, 0)
+C_ACCENT = (255, 160, 0)     # Bright cyan-blue for active elements
+C_SKELETON = (200, 180, 0)   # Muted cyan for hand bones
+C_JOINT = (0, 180, 220)      # Orange for joint dots
+C_TIP_UP = (0, 230, 0)       # Green fingertip
+C_TIP_DN = (0, 0, 180)       # Red fingertip
 
-
-# MediaPipe hand connections for drawing skeleton
+# Hand skeleton connections
 HAND_CONNECTIONS = [
-    # Thumb
     (LandmarkIndex.WRIST, LandmarkIndex.THUMB_CMC),
     (LandmarkIndex.THUMB_CMC, LandmarkIndex.THUMB_MCP),
     (LandmarkIndex.THUMB_MCP, LandmarkIndex.THUMB_IP),
     (LandmarkIndex.THUMB_IP, LandmarkIndex.THUMB_TIP),
-    # Index
     (LandmarkIndex.WRIST, LandmarkIndex.INDEX_MCP),
     (LandmarkIndex.INDEX_MCP, LandmarkIndex.INDEX_PIP),
     (LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_DIP),
     (LandmarkIndex.INDEX_DIP, LandmarkIndex.INDEX_TIP),
-    # Middle
     (LandmarkIndex.WRIST, LandmarkIndex.MIDDLE_MCP),
     (LandmarkIndex.MIDDLE_MCP, LandmarkIndex.MIDDLE_PIP),
     (LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_DIP),
     (LandmarkIndex.MIDDLE_DIP, LandmarkIndex.MIDDLE_TIP),
-    # Ring
     (LandmarkIndex.WRIST, LandmarkIndex.RING_MCP),
     (LandmarkIndex.RING_MCP, LandmarkIndex.RING_PIP),
     (LandmarkIndex.RING_PIP, LandmarkIndex.RING_DIP),
     (LandmarkIndex.RING_DIP, LandmarkIndex.RING_TIP),
-    # Pinky
     (LandmarkIndex.WRIST, LandmarkIndex.PINKY_MCP),
     (LandmarkIndex.PINKY_MCP, LandmarkIndex.PINKY_PIP),
     (LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_DIP),
     (LandmarkIndex.PINKY_DIP, LandmarkIndex.PINKY_TIP),
-    # Palm
     (LandmarkIndex.INDEX_MCP, LandmarkIndex.MIDDLE_MCP),
     (LandmarkIndex.MIDDLE_MCP, LandmarkIndex.RING_MCP),
     (LandmarkIndex.RING_MCP, LandmarkIndex.PINKY_MCP),
     (LandmarkIndex.PINKY_MCP, LandmarkIndex.WRIST),
 ]
 
-# Colors (BGR format for OpenCV)
-COLOR_CYAN = (255, 255, 0)
-COLOR_GREEN = (0, 220, 0)
-COLOR_YELLOW = (0, 220, 255)
-COLOR_RED = (0, 0, 220)
-COLOR_WHITE = (255, 255, 255)
-COLOR_GRAY = (150, 150, 150)
-COLOR_DARK_BG = (30, 30, 30)
-COLOR_LANDMARK_DOT = (0, 200, 255)  # Orange-yellow for joint dots
-COLOR_FINGERTIP = (0, 255, 0)       # Green for extended fingertips
-COLOR_FINGERTIP_CURLED = (0, 0, 200) # Red for curled fingertips
+
+@dataclass
+class OverlayState:
+    """All data the overlay needs to render one frame."""
+    tracking: TrackingResult
+    right_gesture: Optional[GestureResult] = None
+    left_gesture: Optional[GestureResult] = None
+    right_in_zone: bool = False
+    left_in_zone: bool = False
+    chord_name: str = ""
+    roman: str = ""
+    notes: str = ""
+    chord_state: str = "IDLE"       # IDLE, DETECTING, CONFIRMING, ACTIVE, CHANGING
+    confirm_progress: float = 0.0
+    key_display: str = ""
+    modifier_name: str = ""
+    modifier_active: bool = False
+    inversion: int = 0              # 0=root, 1=1st, 2=2nd
+    cc_number: int = 1
+    cc_value: int = 0
+    cc_normalized: float = 0.0
+    cc_enabled: bool = True
+    fps: float = 0.0
+    inference_ms: float = 0.0
+    midi_available: bool = True
+    zone_threshold: float = 0.75
 
 
 class Overlay:
     """
-    Draws visual feedback onto camera frames.
-
-    Usage:
-        overlay = Overlay()
-        frame = overlay.draw(frame, tracking_result, gesture_result, fps=30.0)
-        cv2.imshow("GestureChord", frame)
+    Draws all visual feedback. Two modes:
+        Performance mode (show_debug=False): minimal, glanceable
+        Debug mode (show_debug=True): full diagnostics
     """
 
-    WINDOW_NAME = "GestureChord"
-
-    def __init__(self, show_debug_info: bool = True):
-        """
-        Args:
-            show_debug_info: If True, show extension ratios and raw counts.
-                Useful during development, can be toggled off for clean UI.
-        """
+    def __init__(self, show_debug_info: bool = False):
         self.show_debug_info = show_debug_info
 
-    def draw(
-        self,
-        frame: np.ndarray,
-        tracking: TrackingResult,
-        gesture: Optional[GestureResult] = None,
-        fps: float = 0.0,
-        status_text: str = "",
-        chord_display: Optional[dict] = None,
-    ) -> np.ndarray:
-        """
-        Draw all overlay elements onto the frame.
+    def draw(self, frame: np.ndarray, state: OverlayState) -> np.ndarray:
+        """Draw all overlay elements onto the frame."""
+        h, w = frame.shape[:2]
 
-        Args:
-            frame: BGR frame to draw on (will be modified in place).
-            tracking: Hand tracking results for this frame.
-            gesture: Gesture recognition results (None if no hand detected).
-            fps: Current frames per second for display.
-            status_text: Additional status message (e.g., current key, mode).
-            chord_display: Optional dict with chord info for display:
-                {
-                    "chord_name": "C major",
-                    "roman": "I",
-                    "notes": "C E G",
-                    "state": "ACTIVE" | "CONFIRMING" | "CHANGING" | ...,
-                    "progress": 0.0-1.0,
-                    "key": "C major",
-                }
+        # ── Always drawn (both modes) ──
+        self._draw_chord_panel(frame, state, w, h)
+        self._draw_right_badge(frame, state, w)
+        self._draw_left_badge(frame, state, w)
+        self._draw_status_strip(frame, state, w)
+        self._draw_cc_bar(frame, state, w)
+        self._draw_zone_line(frame, state, w, h)
 
-        Returns:
-            The same frame with overlay drawn.
-        """
-        if tracking.has_hands:
-            for hand in tracking.hands:
-                self._draw_hand_skeleton(frame, hand)
-                self._draw_fingertips(frame, hand, gesture)
+        # ── Hand skeletons (performance: thin/subtle, debug: thick/bright) ──
+        if state.tracking.has_hands:
+            for hand in state.tracking.hands:
+                self._draw_skeleton(frame, hand)
 
-        # Draw info panels
-        self._draw_finger_count(frame, gesture)
-        self._draw_confidence_bar(frame, tracking, gesture)
-        self._draw_fps(frame, fps, tracking.inference_time_ms)
-        self._draw_status(frame, tracking, gesture, status_text)
+        # ── Debug-only elements ──
+        if self.show_debug_info:
+            self._draw_fingertips(frame, state)
+            self._draw_finger_ratios(frame, state)
+            self._draw_fps(frame, state, w, h)
 
-        if chord_display is not None:
-            self._draw_chord_panel(frame, chord_display)
-
-        if self.show_debug_info and gesture is not None:
-            self._draw_debug_info(frame, gesture)
+        # ── Mode indicator ──
+        mode_text = "DEBUG (D)" if self.show_debug_info else "PERF (D)"
+        mode_color = C_YELLOW if self.show_debug_info else C_DARK_GRAY
+        cv2.putText(frame, mode_text, (10, h - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.33, mode_color, 1, cv2.LINE_AA)
 
         return frame
 
-    def _draw_hand_skeleton(self, frame: np.ndarray, hand: HandData) -> None:
-        """Draw hand landmark connections (skeleton)."""
-        for start_idx, end_idx in HAND_CONNECTIONS:
-            start = hand.landmarks[start_idx]
-            end = hand.landmarks[end_idx]
-            cv2.line(
-                frame,
-                (start.px, start.py),
-                (end.px, end.py),
-                COLOR_CYAN,
-                2,
-                cv2.LINE_AA,
-            )
+    # ── Chord Panel (center-bottom) ──
 
-        # Draw joint dots
-        for lm in hand.landmarks:
-            cv2.circle(frame, (lm.px, lm.py), 4, COLOR_LANDMARK_DOT, -1, cv2.LINE_AA)
+    def _draw_chord_panel(self, frame, s: OverlayState, w, h):
+        pw, ph = 340, 90
+        px = (w - pw) // 2
+        py = h - ph - 8
 
-    def _draw_fingertips(
-        self,
-        frame: np.ndarray,
-        hand: HandData,
-        gesture: Optional[GestureResult],
-    ) -> None:
-        """Draw colored circles on fingertips: green if extended, red if curled."""
-        if gesture is None:
-            return
+        # Background with slight transparency effect
+        overlay_region = frame[py:py+ph, px:px+pw].copy()
+        cv2.rectangle(frame, (px, py), (px+pw, py+ph), C_BG, -1)
+        # Blend for semi-transparency
+        cv2.addWeighted(overlay_region, 0.2, frame[py:py+ph, px:px+pw], 0.8, 0,
+                        frame[py:py+ph, px:px+pw])
 
-        tip_indices = [
-            LandmarkIndex.THUMB_TIP,
-            LandmarkIndex.INDEX_TIP,
-            LandmarkIndex.MIDDLE_TIP,
-            LandmarkIndex.RING_TIP,
+        # Border color based on state
+        if s.chord_state == "ACTIVE":
+            border = C_GREEN
+        elif s.chord_state in ("CONFIRMING", "CHANGING"):
+            border = C_YELLOW
+        else:
+            border = C_BORDER
+        cv2.rectangle(frame, (px, py), (px+pw, py+ph), border, 2)
+
+        # Key (top line)
+        cv2.putText(frame, s.key_display, (px+10, py+16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, C_GRAY, 1, cv2.LINE_AA)
+
+        if s.chord_name:
+            # Roman numeral (large)
+            r_color = C_GREEN if s.chord_state == "ACTIVE" else C_YELLOW
+            cv2.putText(frame, s.roman, (px+10, py+55),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, r_color, 2, cv2.LINE_AA)
+
+            # Chord name
+            cv2.putText(frame, s.chord_name, (px+110, py+42),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, C_WHITE, 1, cv2.LINE_AA)
+
+            # Note names
+            cv2.putText(frame, s.notes, (px+110, py+62),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, C_GRAY, 1, cv2.LINE_AA)
+        else:
+            prompt = "Show your hand" if s.chord_state == "IDLE" else "..."
+            cv2.putText(frame, prompt, (px+100, py+50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, C_DARK_GRAY, 1, cv2.LINE_AA)
+
+        # Progress bar
+        bx, by, bw, bh = px+8, py+ph-10, pw-16, 5
+        cv2.rectangle(frame, (bx, by), (bx+bw, by+bh), (40, 40, 40), -1)
+        if s.confirm_progress > 0:
+            fill = int(bw * s.confirm_progress)
+            fc = C_GREEN if s.confirm_progress >= 1.0 else C_YELLOW
+            cv2.rectangle(frame, (bx, by), (bx+fill, by+bh), fc, -1)
+
+    # ── Right Hand Badge ──
+
+    def _draw_right_badge(self, frame, s: OverlayState, w):
+        self._draw_badge(frame, "R", s.right_gesture, s.right_in_zone, w-135, 8)
+
+    # ── Left Hand Badge ──
+
+    def _draw_left_badge(self, frame, s: OverlayState, w):
+        self._draw_badge(frame, "L", s.left_gesture, s.left_in_zone, w-135, 48)
+
+    def _draw_badge(self, frame, label, gesture, in_zone, x, y):
+        bw, bh = 127, 35
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BG, -1)
+
+        if gesture is not None and in_zone:
+            color = C_GREEN if gesture.is_stable else C_YELLOW
+            cv2.putText(frame, f"{label}: {gesture.finger_count}",
+                        (x+6, y+26), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        color, 2, cv2.LINE_AA)
+            # Raw count indicator if different
+            if gesture.raw_finger_count != gesture.finger_count:
+                cv2.putText(frame, f"({gesture.raw_finger_count})",
+                            (x+88, y+26), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                            C_YELLOW, 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, f"{label}: --",
+                        (x+6, y+26), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        C_DARK_GRAY, 2, cv2.LINE_AA)
+
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BORDER, 1)
+
+    # ── Status Strip (modifier + inversion) ──
+
+    def _draw_status_strip(self, frame, s: OverlayState, w):
+        x, y = w - 135, 88
+        bw, bh = 127, 22
+
+        # Modifier
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BG, -1)
+        mod_text = s.modifier_name if s.modifier_name else "triad"
+        mod_color = C_ACCENT if s.modifier_active else C_DARK_GRAY
+        cv2.putText(frame, f"MOD {mod_text}", (x+4, y+16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, mod_color, 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BORDER, 1)
+
+        # Inversion
+        y2 = y + bh + 2
+        cv2.rectangle(frame, (x, y2), (x+bw, y2+bh), C_BG, -1)
+        inv_names = ["root", "1st inv", "2nd inv"]
+        inv_color = C_TEAL if s.inversion > 0 else C_DARK_GRAY
+        cv2.putText(frame, f"INV {inv_names[s.inversion]}", (x+4, y2+16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, inv_color, 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (x, y2), (x+bw, y2+bh), C_BORDER, 1)
+
+        # MIDI status
+        if not s.midi_available:
+            y3 = y2 + bh + 2
+            cv2.rectangle(frame, (x, y3), (x+bw, y3+bh), C_BG, -1)
+            cv2.putText(frame, "NO MIDI", (x+20, y3+16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, C_RED, 1, cv2.LINE_AA)
+            cv2.rectangle(frame, (x, y3), (x+bw, y3+bh), C_RED, 1)
+
+    # ── CC Expression Bar ──
+
+    def _draw_cc_bar(self, frame, s: OverlayState, w):
+        x, y = w - 135, 140
+        bw, bh = 127, 52
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BG, -1)
+
+        # Header
+        en_str = "ON" if s.cc_enabled else "OFF"
+        hdr_color = C_TEAL if s.cc_enabled else C_DARK_GRAY
+        cv2.putText(frame, f"CC{s.cc_number} {en_str}", (x+4, y+14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, hdr_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, str(s.cc_value), (x+90, y+14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, C_WHITE, 1, cv2.LINE_AA)
+
+        # Fill bar
+        bar_x, bar_y = x+4, y+20
+        bar_w, bar_h = bw-8, 12
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x+bar_w, bar_y+bar_h), (40, 40, 40), -1)
+        if s.cc_enabled and s.cc_normalized > 0:
+            fill = int(bar_w * s.cc_normalized)
+            # Color gradient: dark teal -> bright teal
+            g = int(160 + 60 * s.cc_normalized)
+            bar_color = (180, g, 0)
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x+fill, bar_y+bar_h), bar_color, -1)
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x+bar_w, bar_y+bar_h), C_BORDER, 1)
+
+        # Hint
+        cv2.putText(frame, "hand height=effect", (x+4, y+46),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, C_DARK_GRAY, 1, cv2.LINE_AA)
+
+        cv2.rectangle(frame, (x, y), (x+bw, y+bh), C_BORDER, 1)
+
+    # ── Zone Line ──
+
+    def _draw_zone_line(self, frame, s: OverlayState, w, h):
+        zy = int(h * s.zone_threshold)
+        active = s.right_in_zone or s.left_in_zone
+        color = (0, 140, 0) if active else (50, 50, 50)
+        cv2.line(frame, (0, zy), (w, zy), color, 1, cv2.LINE_AA)
+        cv2.putText(frame, "zone", (w-50, zy-4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+
+    # ── Hand Skeleton ──
+
+    def _draw_skeleton(self, frame, hand: HandData):
+        alpha = 1.0 if self.show_debug_info else 0.5
+        thickness = 2 if self.show_debug_info else 1
+        color = C_SKELETON if self.show_debug_info else (130, 120, 0)
+
+        for s_idx, e_idx in HAND_CONNECTIONS:
+            s = hand.landmarks[s_idx]
+            e = hand.landmarks[e_idx]
+            cv2.line(frame, (s.px, s.py), (e.px, e.py), color, thickness, cv2.LINE_AA)
+
+        if self.show_debug_info:
+            for lm in hand.landmarks:
+                cv2.circle(frame, (lm.px, lm.py), 3, C_JOINT, -1, cv2.LINE_AA)
+
+    # ── Debug: Fingertips ──
+
+    def _draw_fingertips(self, frame, s: OverlayState):
+        """Color-coded fingertip dots for both hands."""
+        tips = [
+            LandmarkIndex.THUMB_TIP, LandmarkIndex.INDEX_TIP,
+            LandmarkIndex.MIDDLE_TIP, LandmarkIndex.RING_TIP,
             LandmarkIndex.PINKY_TIP,
         ]
 
-        for i, tip_idx in enumerate(tip_indices):
-            lm = hand.landmarks[tip_idx]
-            color = COLOR_FINGERTIP if gesture.finger_states[i] else COLOR_FINGERTIP_CURLED
-            cv2.circle(frame, (lm.px, lm.py), 8, color, -1, cv2.LINE_AA)
-            cv2.circle(frame, (lm.px, lm.py), 8, COLOR_WHITE, 1, cv2.LINE_AA)
+        for hand, gesture in [(s.tracking.get_right_hand(), s.right_gesture),
+                              (s.tracking.get_left_hand(), s.left_gesture)]:
+            if hand is None or gesture is None:
+                continue
+            for i, tip_idx in enumerate(tips):
+                lm = hand.landmarks[tip_idx]
+                color = C_TIP_UP if gesture.finger_states[i] else C_TIP_DN
+                cv2.circle(frame, (lm.px, lm.py), 7, color, -1, cv2.LINE_AA)
+                cv2.circle(frame, (lm.px, lm.py), 7, C_WHITE, 1, cv2.LINE_AA)
 
-    def _draw_finger_count(
-        self, frame: np.ndarray, gesture: Optional[GestureResult]
-    ) -> None:
-        """Draw large finger count in the top-left corner."""
-        h, w = frame.shape[:2]
+    # ── Debug: Finger Ratios ──
 
-        # Background panel
-        panel_w, panel_h = 120, 80
-        cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), COLOR_DARK_BG, -1)
-        cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), COLOR_GRAY, 1)
+    def _draw_finger_ratios(self, frame, s: OverlayState):
+        """Per-finger extension ratios for the right hand."""
+        gesture = s.right_gesture
+        if gesture is None:
+            return
 
-        if gesture is not None:
-            # Large finger count
-            count_text = str(gesture.finger_count)
-            color = COLOR_GREEN if gesture.is_stable else COLOR_YELLOW
-            cv2.putText(
-                frame, count_text, (30, 75),
-                cv2.FONT_HERSHEY_SIMPLEX, 2.0, color, 3, cv2.LINE_AA,
-            )
+        names = ["THM", "IDX", "MID", "RNG", "PNK"]
+        x0, y0 = 8, 10
 
-            # Small label
-            cv2.putText(
-                frame, "FINGERS", (40, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_GRAY, 1, cv2.LINE_AA,
-            )
+        cv2.rectangle(frame, (x0, y0), (x0+240, y0+80), C_BG, -1)
 
-            # Raw count if different (shows filtering is active)
-            if gesture.raw_finger_count != gesture.finger_count:
-                raw_text = f"raw:{gesture.raw_finger_count}"
-                cv2.putText(
-                    frame, raw_text, (85, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_YELLOW, 1, cv2.LINE_AA,
-                )
-        else:
-            cv2.putText(
-                frame, "-", (45, 75),
-                cv2.FONT_HERSHEY_SIMPLEX, 2.0, COLOR_GRAY, 3, cv2.LINE_AA,
-            )
-            cv2.putText(
-                frame, "NO HAND", (30, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_GRAY, 1, cv2.LINE_AA,
-            )
-
-    def _draw_confidence_bar(
-        self,
-        frame: np.ndarray,
-        tracking: TrackingResult,
-        gesture: Optional[GestureResult],
-    ) -> None:
-        """Draw a confidence/stability bar below the finger count."""
-        bar_x, bar_y = 10, 100
-        bar_w, bar_h = 120, 12
-
-        # Background
-        cv2.rectangle(
-            frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h),
-            COLOR_DARK_BG, -1,
-        )
-
-        if gesture is not None:
-            # Fill based on rolling mode confidence
-            confidence = self._count_filter_confidence(gesture)
-            fill_w = int(bar_w * confidence)
-
-            # Color: red → yellow → green
-            if confidence < 0.4:
-                color = COLOR_RED
-            elif confidence < 0.7:
-                color = COLOR_YELLOW
-            else:
-                color = COLOR_GREEN
-
-            cv2.rectangle(
-                frame,
-                (bar_x, bar_y),
-                (bar_x + fill_w, bar_y + bar_h),
-                color, -1,
-            )
-
-        # Border
-        cv2.rectangle(
-            frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h),
-            COLOR_GRAY, 1,
-        )
-
-        # Label
-        cv2.putText(
-            frame, "STABILITY", (bar_x + 25, bar_y + 24),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, COLOR_GRAY, 1, cv2.LINE_AA,
-        )
-
-    def _count_filter_confidence(self, gesture: GestureResult) -> float:
-        """Estimate confidence from gesture stability. Simple heuristic for now."""
-        if gesture.is_stable:
-            return 1.0
-        if gesture.finger_count == gesture.raw_finger_count:
-            return 0.8
-        return 0.4
-
-    def _draw_fps(
-        self, frame: np.ndarray, fps: float, inference_ms: float
-    ) -> None:
-        """Draw FPS and inference time in bottom-right corner."""
-        h, w = frame.shape[:2]
-        text = f"FPS: {fps:.0f}  |  Inference: {inference_ms:.0f}ms"
-        cv2.putText(
-            frame, text, (w - 280, h - 15),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_GRAY, 1, cv2.LINE_AA,
-        )
-
-    def _draw_status(
-        self,
-        frame: np.ndarray,
-        tracking: TrackingResult,
-        gesture: Optional[GestureResult],
-        status_text: str,
-    ) -> None:
-        """Draw status text in the top-right area."""
-        h, w = frame.shape[:2]
-
-        # Detection status
-        if not tracking.has_hands:
-            status = "IDLE - Show your hand"
-            color = COLOR_GRAY
-        elif gesture is not None and gesture.is_stable:
-            status = "TRACKING (stable)"
-            color = COLOR_GREEN
-        else:
-            status = "TRACKING..."
-            color = COLOR_YELLOW
-
-        cv2.putText(
-            frame, status, (w - 250, 30),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA,
-        )
-
-        # Handedness
-        if tracking.has_hands:
-            primary = tracking.get_primary_hand()
-            if primary:
-                hand_text = f"{primary.handedness} hand ({primary.confidence:.0%})"
-                cv2.putText(
-                    frame, hand_text, (w - 250, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_GRAY, 1, cv2.LINE_AA,
-                )
-
-        # Custom status text (will show key/mode info in later phases)
-        if status_text:
-            cv2.putText(
-                frame, status_text, (w - 250, 80),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA,
-            )
-
-    def _draw_debug_info(
-        self, frame: np.ndarray, gesture: GestureResult
-    ) -> None:
-        """Draw per-finger extension ratios and states for debugging."""
-        h, w = frame.shape[:2]
-        finger_names = ["THM", "IDX", "MID", "RNG", "PNK"]
-
-        # Position below the stability bar (top-left area)
-        y_start = 135
-        x_start = 10
-
-        # Background panel
-        cv2.rectangle(
-            frame,
-            (x_start, y_start - 5),
-            (x_start + 280, y_start + 75),
-            COLOR_DARK_BG, -1,
-        )
-
-        for i, (name, ratio, state) in enumerate(
-            zip(finger_names, gesture.extension_ratios, gesture.finger_states)
+        for i, (name, ratio, up) in enumerate(
+            zip(names, gesture.extension_ratios, gesture.finger_states)
         ):
-            y = y_start + i * 14
-            color = COLOR_GREEN if state else COLOR_RED
+            y = y0 + 4 + i * 15
+            color = C_GREEN if up else C_RED
+            tag = "UP" if up else "DN"
+            cv2.putText(frame, f"{name} {tag} {ratio:.2f}", (x0+4, y+11),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+            # Mini bar
+            bx = x0 + 115
+            bw = int(120 * ratio)
+            cv2.rectangle(frame, (bx, y), (bx+bw, y+10), color, -1)
+            cv2.rectangle(frame, (bx, y), (bx+120, y+10), C_BORDER, 1)
 
-            # Finger name and state (use ASCII-safe chars)
-            state_char = "UP" if state else "DN"
-            text = f"{name} {state_char} {ratio:.2f}"
-            cv2.putText(
-                frame, text, (x_start + 5, y + 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1, cv2.LINE_AA,
-            )
+        cv2.rectangle(frame, (x0, y0), (x0+240, y0+80), C_BORDER, 1)
 
-            # Mini bar chart for extension ratio
-            bar_x = x_start + 120
-            bar_w = int(150 * ratio)
-            cv2.rectangle(frame, (bar_x, y), (bar_x + bar_w, y + 10), color, -1)
-            cv2.rectangle(frame, (bar_x, y), (bar_x + 150, y + 10), COLOR_GRAY, 1)
+    # ── Debug: FPS ──
 
-    def _draw_chord_panel(self, frame: np.ndarray, info: dict) -> None:
-        """
-        Draw chord information panel — the most important musical feedback.
-
-        Shows: chord name, roman numeral, note names, confirmation progress,
-        and current key. Positioned center-bottom for easy glancing.
-        """
-        h, w = frame.shape[:2]
-
-        panel_w, panel_h = 340, 95
-        panel_x = (w - panel_w) // 2
-        panel_y = h - panel_h - 10
-
-        state = info.get("state", "IDLE")
-        progress = info.get("progress", 0.0)
-        chord_name = info.get("chord_name", "")
-        roman = info.get("roman", "")
-        notes = info.get("notes", "")
-        key_name = info.get("key", "")
-
-        # Panel background
-        cv2.rectangle(
-            frame, (panel_x, panel_y),
-            (panel_x + panel_w, panel_y + panel_h),
-            COLOR_DARK_BG, -1,
-        )
-
-        # State-dependent border color
-        if state == "ACTIVE":
-            border_color = COLOR_GREEN
-        elif state in ("CONFIRMING", "CHANGING"):
-            border_color = COLOR_YELLOW
-        else:
-            border_color = COLOR_GRAY
-
-        cv2.rectangle(
-            frame, (panel_x, panel_y),
-            (panel_x + panel_w, panel_y + panel_h),
-            border_color, 2,
-        )
-
-        # Key display (top of panel)
-        cv2.putText(
-            frame, f"Key: {key_name}", (panel_x + 10, panel_y + 18),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.42, COLOR_GRAY, 1, cv2.LINE_AA,
-        )
-
-        if chord_name:
-            # Roman numeral (large, left side)
-            roman_color = COLOR_GREEN if state == "ACTIVE" else COLOR_YELLOW
-            cv2.putText(
-                frame, roman, (panel_x + 12, panel_y + 58),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, roman_color, 2, cv2.LINE_AA,
-            )
-
-            # Chord name (right of roman numeral — offset enough for "vii°")
-            cv2.putText(
-                frame, chord_name, (panel_x + 110, panel_y + 48),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1, cv2.LINE_AA,
-            )
-
-            # Note names
-            cv2.putText(
-                frame, notes, (panel_x + 110, panel_y + 68),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_GRAY, 1, cv2.LINE_AA,
-            )
-        else:
-            # No chord
-            label = "Show fingers to play"
-            if state == "IDLE":
-                label = "Show your hand"
-            cv2.putText(
-                frame, label, (panel_x + 50, panel_y + 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_GRAY, 1, cv2.LINE_AA,
-            )
-
-        # Confirmation progress bar (bottom of panel)
-        bar_x = panel_x + 10
-        bar_y = panel_y + panel_h - 12
-        bar_w = panel_w - 20
-        bar_h = 6
-
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (50, 50, 50), -1)
-        if progress > 0:
-            fill_w = int(bar_w * progress)
-            fill_color = COLOR_GREEN if progress >= 1.0 else COLOR_YELLOW
-            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), fill_color, -1)
+    def _draw_fps(self, frame, s: OverlayState, w, h):
+        text = f"FPS:{s.fps:.0f}  INF:{s.inference_ms:.0f}ms"
+        cv2.putText(frame, text, (w-200, h-8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, C_DARK_GRAY, 1, cv2.LINE_AA)

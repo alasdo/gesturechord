@@ -31,7 +31,7 @@ from engine.music_theory import MusicTheoryEngine, ChordInfo
 from engine.chord_mapper import ChordMapper, Modifier, MODIFIER_NAMES
 from engine.expression import ExpressionController
 from midi.midi_output import MidiOutput
-from ui.overlay import Overlay
+from ui.overlay import Overlay, OverlayState
 from utils.logger import setup_logger
 
 
@@ -72,6 +72,7 @@ MIDI_PORT_NAME = "GestureChord"
 MIDI_CHANNEL = 0
 
 WINDOW_NAME = "GestureChord v2"
+DISPLAY_SCALE = 1.5              # Scale up the window (1.0 = native 640x480, 1.5 = 960x720)
 PERFORMANCE_ZONE_THRESHOLD = 0.75
 HAND_LOST_RESET_FRAMES = 15
 
@@ -119,7 +120,7 @@ def main():
         enabled=True)
 
     midi_out = MidiOutput(port_name=MIDI_PORT_NAME, channel=MIDI_CHANNEL)
-    overlay = Overlay(show_debug_info=True)
+    overlay = Overlay(show_debug_info=False)  # Press D for debug mode
 
     # ── State ──
     right_frames_lost = 0
@@ -252,54 +253,48 @@ def main():
                     current_mapped_chord = mapped
                     _log_chord(logger, "MODIFIER", mapped)
 
-            # ── Overlay ──
-            chord_display = _build_chord_display(
-                event, current_mapped_chord, music_engine,
-                right_finger_count, chord_mapper)
+            # ── Build overlay state and render ──
+            os = OverlayState(
+                tracking=tracking,
+                right_gesture=right_gesture,
+                left_gesture=left_gesture,
+                right_in_zone=right_in_zone,
+                left_in_zone=left_in_zone,
+                chord_name=current_mapped_chord.display_name if current_mapped_chord else "",
+                roman=current_mapped_chord.chord_info.roman_numeral if current_mapped_chord else "",
+                notes=" ".join(current_mapped_chord.chord_info.note_names) if current_mapped_chord else "",
+                chord_state=event.state.name,
+                confirm_progress=event.confirmation_progress,
+                key_display=music_engine.key_display,
+                modifier_name=chord_mapper.active_modifier_name or "triad",
+                modifier_active=chord_mapper.active_modifier != Modifier.NONE,
+                inversion=chord_mapper.inversion,
+                cc_number=expression.cc_number,
+                cc_value=expression.cc_value,
+                cc_normalized=expression.cc_normalized,
+                cc_enabled=expression.enabled,
+                fps=camera.fps,
+                inference_ms=tracking.inference_time_ms,
+                midi_available=midi_available,
+                zone_threshold=PERFORMANCE_ZONE_THRESHOLD,
+            )
 
-            status_parts = []
-            if not midi_available:
-                status_parts.append("PREVIEW")
+            # Show pending chord during confirmation if nothing active
+            if not current_mapped_chord and right_finger_count and right_finger_count > 0:
+                if event.state.name in ("CONFIRMING", "CHANGING", "DETECTING"):
+                    pending = chord_mapper.get_chord(right_finger_count)
+                    if pending:
+                        os.chord_name = pending.display_name
+                        os.roman = pending.chord_info.roman_numeral
+                        os.notes = " ".join(pending.chord_info.note_names)
 
-            frame = overlay.draw(
-                frame=frame, tracking=tracking, gesture=right_gesture,
-                fps=camera.fps, status_text="  |  ".join(status_parts),
-                chord_display=chord_display)
+            frame = overlay.draw(frame, os)
 
-            h_frame, w_frame = frame.shape[:2]
-
-            # Hand badges
-            _draw_hand_badge(frame, "R", right_gesture, right_in_zone, w_frame - 140, 10)
-            _draw_hand_badge(frame, "L", left_gesture, left_in_zone, w_frame - 140, 65)
-
-            # Modifier display
-            mod_name = chord_mapper.active_modifier_name or "triad"
-            mod_color = (0, 220, 0) if chord_mapper.active_modifier != Modifier.NONE else (150, 150, 150)
-            cv2.rectangle(frame, (w_frame - 140, 120), (w_frame - 10, 150), (30, 30, 30), -1)
-            cv2.putText(frame, f"MOD: {mod_name}", (w_frame - 135, 142),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, mod_color, 1, cv2.LINE_AA)
-            cv2.rectangle(frame, (w_frame - 140, 120), (w_frame - 10, 150), (80, 80, 80), 1)
-
-            # Inversion indicator (keyboard-toggled)
-            inv_level = chord_mapper.inversion
-            inv_names = ["root", "1st inv", "2nd inv"]
-            inv_text = f"INV: {inv_names[inv_level]}"
-            inv_color = (0, 200, 200) if inv_level > 0 else (80, 80, 80)
-            cv2.rectangle(frame, (w_frame - 140, 152), (w_frame - 10, 172), (30, 30, 30), -1)
-            cv2.putText(frame, inv_text, (w_frame - 135, 167),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, inv_color, 1, cv2.LINE_AA)
-            cv2.rectangle(frame, (w_frame - 140, 152), (w_frame - 10, 172), (80, 80, 80), 1)
-
-            # Expression CC bar
-            _draw_cc_bar(frame, expression, w_frame - 140, 177)
-
-            # Zone line
-            zone_y = int(h_frame * PERFORMANCE_ZONE_THRESHOLD)
-            any_in_zone = right_in_zone or left_in_zone
-            zone_color = (0, 180, 0) if any_in_zone else (60, 60, 60)
-            cv2.line(frame, (0, zone_y), (w_frame, zone_y), zone_color, 1, cv2.LINE_AA)
-            cv2.putText(frame, "- zone -", (w_frame - 75, zone_y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, zone_color, 1, cv2.LINE_AA)
+            # Scale up for larger display
+            if DISPLAY_SCALE != 1.0:
+                disp_w = int(frame.shape[1] * DISPLAY_SCALE)
+                disp_h = int(frame.shape[0] * DISPLAY_SCALE)
+                frame = cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
 
             cv2.imshow(WINDOW_NAME, frame)
 
@@ -320,109 +315,12 @@ def main():
         cv2.destroyAllWindows()
 
 
-# ── Drawing helpers ──
-
-def _draw_hand_badge(frame, label, gesture, in_zone, x, y):
-    w, h = 130, 50
-    cv2.rectangle(frame, (x, y), (x + w, y + h), (30, 30, 30), -1)
-    if gesture is not None and in_zone:
-        color = (0, 220, 0) if gesture.is_stable else (0, 220, 255)
-        cv2.putText(frame, f"{label}:{gesture.finger_count}", (x + 5, y + 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2, cv2.LINE_AA)
-        if gesture.raw_finger_count != gesture.finger_count:
-            cv2.putText(frame, f"r:{gesture.raw_finger_count}", (x + 85, y + 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 220, 255), 1, cv2.LINE_AA)
-    else:
-        cv2.putText(frame, f"{label}: -", (x + 5, y + 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (100, 100, 100), 2, cv2.LINE_AA)
-    cv2.rectangle(frame, (x, y), (x + w, y + h), (80, 80, 80), 1)
-
-
-def _draw_cc_bar(frame, expr, x, y):
-    """Draw vertical CC expression bar with value."""
-    bar_w, bar_h = 130, 80
-    cv2.rectangle(frame, (x, y), (x + bar_w, y + bar_h), (30, 30, 30), -1)
-
-    # Label
-    enabled_str = "ON" if expr.enabled else "OFF"
-    label_color = (0, 200, 200) if expr.enabled else (100, 100, 100)
-    cv2.putText(frame, f"CC{expr.cc_number} {enabled_str}", (x + 5, y + 14),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, label_color, 1, cv2.LINE_AA)
-
-    # Value text
-    cv2.putText(frame, str(expr.cc_value), (x + 85, y + 14),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
-
-    # Horizontal fill bar
-    inner_x = x + 5
-    inner_y = y + 22
-    inner_w = bar_w - 10
-    inner_h = 16
-    fill_w = int(inner_w * expr.cc_normalized)
-
-    cv2.rectangle(frame, (inner_x, inner_y),
-                  (inner_x + inner_w, inner_y + inner_h), (50, 50, 50), -1)
-    if fill_w > 0:
-        # Gradient: blue (low) to cyan (high)
-        b = int(200 * (1.0 - expr.cc_normalized))
-        g = int(200 * expr.cc_normalized)
-        bar_color = (200, g + 55, b)
-        cv2.rectangle(frame, (inner_x, inner_y),
-                      (inner_x + fill_w, inner_y + inner_h), bar_color, -1)
-    cv2.rectangle(frame, (inner_x, inner_y),
-                  (inner_x + inner_w, inner_y + inner_h), (80, 80, 80), 1)
-
-    # Tip text
-    cv2.putText(frame, "Hand height = effect", (x + 5, y + 52),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1, cv2.LINE_AA)
-    cv2.putText(frame, "Link in FL: knob > Link", (x + 5, y + 66),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1, cv2.LINE_AA)
-
-    cv2.rectangle(frame, (x, y), (x + bar_w, y + bar_h), (80, 80, 80), 1)
-
-
-# ── Logic helpers ──
+# ── Helpers ──
 
 def _log_chord(logger, action, mapped):
     mod_str = f" [{mapped.modifier_name}]" if mapped.modifier_name else ""
     notes = " ".join(mapped.chord_info.note_names)
     logger.info(f"{action}: {mapped.display_name}{mod_str} [{notes}]")
-
-
-def _build_chord_display(event, mapped_chord, engine, right_count, mapper):
-    state_name = event.state.name
-    mod_name = mapper.active_modifier_name
-
-    if mapped_chord is not None:
-        ci = mapped_chord.chord_info
-        name = mapped_chord.display_name
-        return {
-            "chord_name": name,
-            "roman": ci.roman_numeral,
-            "notes": " ".join(ci.note_names),
-            "state": state_name,
-            "progress": event.confirmation_progress,
-            "key": engine.key_display,
-        }
-
-    if state_name in ("CONFIRMING", "CHANGING", "DETECTING") and right_count and right_count > 0:
-        pending = mapper.get_chord(right_count)
-        if pending:
-            ci = pending.chord_info
-            return {
-                "chord_name": pending.display_name,
-                "roman": ci.roman_numeral,
-                "notes": " ".join(ci.note_names),
-                "state": state_name,
-                "progress": event.confirmation_progress,
-                "key": engine.key_display,
-            }
-
-    return {
-        "chord_name": "", "roman": "", "notes": "",
-        "state": state_name, "progress": 0.0,
-        "key": engine.key_display,
-    }
 
 
 def _handle_keyboard(key, logger, r_rec, l_rec, sm, me, cm, expr, midi, midi_ok, ov):
