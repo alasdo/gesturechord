@@ -80,3 +80,13 @@ arpeggiator:
   bpm: 160                # Notes per minute (40-480)
   pattern: "up"           # up, down, up_down, random
   octave_range: 1         # 1 = chord notes only, 2 = +1 octave
+
+# ── Rhythm (pump retrigger) ──
+rhythm:
+  enabled: true           # Pump detection on by default
+  velocity_threshold: 0.010  # Min downward speed to detect a pump (lower = more sensitive)
+  cooldown_ms: 80         # Min ms between retriggers (80 = max 12.5 hits/sec)
+  smoothing: 0.5          # EMA alpha for velocity smoothing
+  min_velocity: 45        # MIDI velocity for gentle pumps
+  max_velocity: 120       # MIDI velocity for hard pumps
+  speed_for_max: 0.045    # Speed that maps to max velocity

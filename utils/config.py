@@ -51,6 +51,11 @@ DEFAULTS = {
     "arpeggiator": {
         "enabled": False, "bpm": 160.0, "pattern": "up", "octave_range": 1,
     },
+    "rhythm": {
+        "enabled": True, "velocity_threshold": 0.010, "cooldown_ms": 80.0,
+        "smoothing": 0.5, "min_velocity": 45, "max_velocity": 120,
+        "speed_for_max": 0.045,
+    },
 }
 
 
@@ -133,6 +138,16 @@ class ArpeggiatorConfig:
     octave_range: int = 1
 
 @dataclass
+class RhythmConfig:
+    enabled: bool = True
+    velocity_threshold: float = 0.010
+    cooldown_ms: float = 80.0
+    smoothing: float = 0.5
+    min_velocity: int = 45
+    max_velocity: int = 120
+    speed_for_max: float = 0.045
+
+@dataclass
 class Config:
     """Top-level config with typed sections."""
     camera: CameraConfig = field(default_factory=CameraConfig)
@@ -147,6 +162,7 @@ class Config:
     zone: ZoneConfig = field(default_factory=ZoneConfig)
     velocity: VelocityConfig = field(default_factory=VelocityConfig)
     arpeggiator: ArpeggiatorConfig = field(default_factory=ArpeggiatorConfig)
+    rhythm: RhythmConfig = field(default_factory=RhythmConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -175,6 +191,7 @@ def _dict_to_config(data: dict) -> Config:
         zone=ZoneConfig(**data.get("zone", {})),
         velocity=VelocityConfig(**data.get("velocity", {})),
         arpeggiator=ArpeggiatorConfig(**data.get("arpeggiator", {})),
+        rhythm=RhythmConfig(**data.get("rhythm", {})),
     )
 
 
