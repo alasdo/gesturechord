@@ -104,9 +104,10 @@ class ChordMapper:
         self._pending_modifier = Modifier.NONE
         self._modifier_settle_counter = 0
         self._current_degree = 0
+        self._inversion = 0  # 0=root, 1=first, 2=second
 
         logger.info(f"ChordMapper v2: settle={settle_frames}, "
-                    f"modifiers=[triad,7th,sus4,9th,vi,vii], inversions=thumb")
+                    f"modifiers=[triad,7th,sus4,9th,vi,vii], inversions=keyboard")
 
     @property
     def active_modifier(self) -> Modifier:
@@ -115,6 +116,16 @@ class ChordMapper:
     @property
     def active_modifier_name(self) -> str:
         return MODIFIER_NAMES.get(self._active_modifier, "")
+
+    @property
+    def inversion(self) -> int:
+        """Current inversion level: 0=root, 1=first, 2=second."""
+        return self._inversion
+
+    def cycle_inversion(self) -> int:
+        """Cycle through inversions: 0 → 1 → 2 → 0. Returns new level."""
+        self._inversion = (self._inversion + 1) % 3
+        return self._inversion
 
     def update_modifier(self, left_finger_count: Optional[int]) -> bool:
         """Update left hand modifier. Returns True if modifier changed."""
@@ -140,14 +151,12 @@ class ChordMapper:
 
         return False
 
-    def get_chord(self, right_finger_count: int,
-                  thumb_extended: bool = False) -> Optional[MappedChord]:
+    def get_chord(self, right_finger_count: int) -> Optional[MappedChord]:
         """
-        Get the final chord.
+        Get the final chord for right hand count + modifier + inversion.
 
         Args:
             right_finger_count: Right hand finger count (1-5).
-            thumb_extended: If True, apply first inversion.
 
         Returns:
             MappedChord with full info.
@@ -182,8 +191,8 @@ class ChordMapper:
                 display_name=base.chord_name,
             )
 
-        # Apply inversion if thumb is extended
-        if thumb_extended:
+        # Apply inversion (keyboard-toggled, can apply multiple times)
+        for _ in range(self._inversion):
             result = self._apply_inversion(result)
 
         return result
@@ -343,3 +352,4 @@ class ChordMapper:
         self._pending_modifier = Modifier.NONE
         self._modifier_settle_counter = 0
         self._current_degree = 0
+        self._inversion = 0

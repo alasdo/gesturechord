@@ -28,13 +28,16 @@ Use your webcam as a musical instrument. Your right hand selects chords by holdi
 | 4 | vi chord | Am (A C E) |
 | 5 | vii° chord | Bdim (B D F) |
 
-### Right Hand — Inversions
-| Thumb | Voicing |
-|-------|---------|
-| Tucked (down) | Root position — C E G |
-| Extended (up) | 1st inversion — E G C |
+### Inversions (Keyboard Toggle)
+Press **I** to cycle through voicings:
 
-The thumb is independent of finger counting (1-5 uses index through pinky), so you can combine any chord with any inversion.
+| Press I | Voicing | Example (C major) |
+|---------|---------|-------------------|
+| 0 (default) | Root position | C E G |
+| 1 | 1st inversion | E G C |
+| 2 | 2nd inversion | G C E |
+
+Inversions apply to all chords until you press I again. Useful for smooth voice leading between chord changes.
 
 ### Left Hand — Expression Control
 Your left hand's height in the frame sends continuous MIDI CC data:
@@ -98,6 +101,7 @@ The model file (`hand_landmarker.task`, ~12 MB) downloads automatically on first
 | UP / DOWN | Octave up / down |
 | D | Toggle debug overlay |
 | E | Toggle expression CC on/off |
+| I | Cycle inversion (root → 1st → 2nd → root) |
 | T | Send test note (verify MIDI routing) |
 | R | Full reset (filters + state + MIDI) |
 
