@@ -120,6 +120,10 @@ def main():
     _cached_roman = ""
     _cached_notes = ""
 
+    # Link mode: [0]=off (both CCs active), [1]=CC1 solo, [2]=CC2 solo
+    # Using list so it's mutable from _keys()
+    link_mode = [0]
+
     # ── Init ──
     if not camera.open():
         logger.error("Cannot open camera."); sys.exit(1)
@@ -179,12 +183,13 @@ def main():
                     left_rec.reset(); l_reset = True
 
             # ── Modifier + Expression (Y + X) ──
+            # link_mode: 0=both active, 1=CC1 solo, 2=CC2 solo
             mod_changed = cm.update_modifier(lc if lz else None)
             cc_val = expr.update(ly if lz else None)
-            if cc_val is not None and midi_ok:
+            if cc_val is not None and midi_ok and link_mode[0] != 2:
                 midi.send_cc(expr.cc_number, cc_val)
             cc2_val = expr2.update(lx if lz else None)
-            if cc2_val is not None and midi_ok:
+            if cc2_val is not None and midi_ok and link_mode[0] != 1:
                 midi.send_cc(expr2.cc_number, cc2_val)
 
             # ── State machine ──
@@ -284,6 +289,7 @@ def main():
                 cc_normalized=expr.cc_normalized, cc_enabled=expr.enabled,
                 cc2_number=expr2.cc_number, cc2_value=expr2.cc_value,
                 cc2_normalized=expr2.cc_normalized, cc2_enabled=expr2.enabled,
+                link_mode=link_mode[0],
                 fps=camera.fps, inference_ms=tracking.inference_time_ms,
                 midi_available=midi_ok, zone_threshold=cfg.zone.threshold,
                 # Rhythm features
@@ -332,7 +338,7 @@ def main():
             key = cv2.waitKeyEx(1)
             if key == 27 or key == ord("q"): break
             _keys(key, logger, right_rec, left_rec, sm, me, cm, expr,
-                  expr2, vel, arp, rhythm, groove, midi, midi_ok, ov)
+                  expr2, vel, arp, rhythm, groove, midi, midi_ok, ov, link_mode)
 
     except KeyboardInterrupt:
         pass
@@ -349,10 +355,11 @@ def _log(logger, action, m, v=100, lat=0):
                 + (f" ({lat:.0f}ms)" if lat else ""))
 
 
-def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov):
+def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov, lm):
     if key == ord(" "):
         sm.reset(); cm.reset(); ex.reset(); ex2.reset(); vel.reset()
         arp.stop(); rhy.reset(); grv.stop()
+        lm[0] = 0  # Exit link mode on panic
         if mo: mi.panic()
         log.info("PANIC")
     elif key == ord("x"):
@@ -411,6 +418,18 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov)
     elif key == ord("w"):
         ex2.enabled = not ex2.enabled
         log.info(f"Expression2 CC{ex2.cc_number} (X-axis): {'ON' if ex2.enabled else 'OFF'}")
+    elif key == ord("l"):
+        # Link mode: cycles 0 → 1 → 2 → 0
+        # 0 = normal (both CCs active)
+        # 1 = CC1 solo (CC2 muted — link CC1 safely)
+        # 2 = CC2 solo (CC1 muted — link CC2 safely)
+        lm[0] = (lm[0] + 1) % 3
+        if lm[0] == 0:
+            log.info("LINK MODE OFF — both CC1 + CC2 active")
+        elif lm[0] == 1:
+            log.info(f"LINK MODE: CC{ex.cc_number} SOLO (CC{ex2.cc_number} muted) — link CC1 now")
+        elif lm[0] == 2:
+            log.info(f"LINK MODE: CC{ex2.cc_number} SOLO (CC{ex.cc_number} muted) — link CC2 now")
     elif key == ord("v"):
         vel.enabled = not vel.enabled
         log.info(f"Velocity: {'ON' if vel.enabled else 'OFF'}")
