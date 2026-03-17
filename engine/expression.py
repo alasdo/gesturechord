@@ -101,7 +101,7 @@ class ExpressionController:
             return None
 
         range_size = self.zone_bottom - self.zone_top
-        if range_size < 0.01:
+        if abs(range_size) < 0.01:
             return None
 
         normalized = (hand_pos - self.zone_top) / range_size

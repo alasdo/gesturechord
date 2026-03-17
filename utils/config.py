@@ -43,7 +43,7 @@ DEFAULTS = {
         "smoothing": 0.25, "dead_zone": 2.0, "enabled": True,
     },
     "expression2": {
-        "cc_number": 74, "zone_left": 0.15, "zone_right": 0.85,
+        "cc_number": 74, "zone_left": 0.60, "zone_right": 0.35,
         "smoothing": 0.3, "dead_zone": 2.0, "enabled": False,
     },
     "midi": {"port_name": "GestureChord", "channel": 0},
@@ -123,8 +123,8 @@ class ExpressionConfig:
 @dataclass
 class Expression2Config:
     cc_number: int = 74
-    zone_left: float = 0.15
-    zone_right: float = 0.85
+    zone_left: float = 0.60
+    zone_right: float = 0.35
     smoothing: float = 0.3
     dead_zone: float = 2.0
     enabled: bool = False
