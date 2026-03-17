@@ -57,17 +57,16 @@ expression:
   enabled: true           # Start with expression on/off
 
 # ── Expression CC2 (X-axis = hand horizontal position) ──
-# NOTE: Camera is mirrored. Left hand appears on the RIGHT side of frame.
-# Moving left hand toward center (toward right hand) = increasing X.
-# zone_left = hand far out to the side, zone_right = hand near center.
-# Keep zone_right well below 0.5 so you don't have to cross hands to reach max.
+# Left hand sits on the LEFT side of the mirrored frame (low X values).
+# Moving left hand toward center = increasing X.
+# zone_left = hand far out (CC=0), zone_right = hand near center (CC=127).
 expression2:
   cc_number: 74           # CC74 = Brightness/Cutoff (common for filters)
-  zone_left: 0.60         # Hand far out to the side = CC 0
-  zone_right: 0.35        # Hand near center = CC 127
-  smoothing: 0.3          # Slightly more smoothing than Y (X is noisier)
+  zone_left: 0.10         # Hand far left = CC 0
+  zone_right: 0.40        # Hand near center = CC 127
+  smoothing: 0.3
   dead_zone: 2.0
-  enabled: false          # Off by default (toggle with W key)
+  enabled: false
 
 # ── MIDI ──
 midi:
