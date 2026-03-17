@@ -83,6 +83,7 @@ class Arpeggiator:
         self._step_index: int = 0
         self._last_step_time: float = 0.0
         self._current_note: Optional[int] = None
+        self._all_sounding: set = set()  # Track ALL notes we've sent note-on for
         self._playing: bool = False
         self._velocity: int = 100
         self._direction: int = 1  # For UP_DOWN pattern
@@ -134,10 +135,21 @@ class Arpeggiator:
         self._play_current_step()
 
     def stop(self) -> None:
-        """Stop the arpeggiator and silence current note."""
-        if self._current_note is not None and self._midi.is_open:
-            self._midi.stop_chord()
+        """Stop the arpeggiator and silence ALL notes it has played."""
+        if self._midi.is_open:
+            import mido
+            # Kill current note
+            if self._current_note is not None:
+                msg = mido.Message("note_off", note=self._current_note, velocity=0,
+                                   channel=self._midi.channel)
+                self._midi._port.send(msg)
+            # Kill any other notes we may have sent
+            for note in self._all_sounding:
+                msg = mido.Message("note_off", note=note, velocity=0,
+                                   channel=self._midi.channel)
+                self._midi._port.send(msg)
         self._current_note = None
+        self._all_sounding.clear()
         self._playing = False
         self._chord_notes = []
         self._sequence = []
@@ -217,20 +229,22 @@ class Arpeggiator:
         if not self._sequence or not self._midi.is_open:
             return
 
+        import mido
+
         # Stop previous note
         if self._current_note is not None:
-            import mido
             msg = mido.Message("note_off", note=self._current_note, velocity=0,
                                channel=self._midi.channel)
             self._midi._port.send(msg)
+            self._all_sounding.discard(self._current_note)
 
         # Play new note
         note = self._sequence[self._step_index % len(self._sequence)]
-        import mido
         msg = mido.Message("note_on", note=note, velocity=self._velocity,
                            channel=self._midi.channel)
         self._midi._port.send(msg)
         self._current_note = note
+        self._all_sounding.add(note)
 
     def reset(self):
         self.stop()
