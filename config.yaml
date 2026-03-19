@@ -1,112 +1,98 @@
-# ═══════════════════════════════════════════════════════════
-# GestureChord Configuration
-# ═══════════════════════════════════════════════════════════
-# Edit this file to customize your setup.
-# Delete this file to regenerate defaults.
-# All changes take effect on next launch (no hot-reload).
-
-# ── Camera ──
 camera:
-  index: 0              # Camera device (0 = default, 1 = secondary)
-  width: 640            # Capture width (640 recommended)
-  height: 480           # Capture height (480 recommended)
-
-# ── Display ──
+  index: 0
+  width: 640
+  height: 480
 display:
-  scale: 1.5            # Window scale (1.0 = 640x480, 1.5 = 960x720, 2.0 = 1280x960)
-  window_name: "GestureChord v2"
-  start_in_debug: false # true = start in debug mode, false = performance mode
-
-# ── Hand Tracking ──
+  scale: 1.5
+  window_name: GestureChord v2
+  start_in_debug: false
 tracking:
   max_hands: 2
-  detection_confidence: 0.65   # 0.0-1.0, higher = fewer false detections
-  tracking_confidence: 0.55    # 0.0-1.0, higher = more stable tracking
-
-# ── Gesture Recognition ──
+  detection_confidence: 0.65
+  tracking_confidence: 0.55
 gesture:
-  hysteresis_high: 0.55  # Finger "up" threshold
-  hysteresis_low: 0.35   # Finger "down" threshold
-  rolling_window: 5      # Reduced from 7: ~167ms smoothing (was ~233ms)
-
-# ── State Machine (debouncing) — TUNED FOR LOW LATENCY ──
+  hysteresis_high: 0.55
+  hysteresis_low: 0.35
+  rolling_window: 7
 state_machine:
-  confirmation_frames: 3  # Reduced from 5: ~100ms first chord (was ~167ms)
-  change_frames: 2        # Reduced from 4: ~67ms chord change (was ~133ms)
-  settle_frames: 2        # Reduced from 3: ~67ms anti-cascade (was ~100ms)
-  release_grace_ms: 150   # Reduced from 250: faster note-off
-
-# ── Left Hand Modifier ──
+  confirmation_frames: 5
+  change_frames: 4
+  settle_frames: 3
+  release_grace_ms: 250
 modifier:
-  settle_frames: 3        # Reduced from 4: faster modifier response
-
-# ── Music ──
+  settle_frames: 4
 music:
-  key: "C"                # Root note (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
-  scale: "major"          # Scale type (major, natural_minor, harmonic_minor, dorian, mixolydian)
-  octave: 4               # Base octave (3-6, where 4 = middle C region)
-  velocity: 100           # MIDI velocity (0-127, louder = higher)
-
-# ── Expression CC (Y-axis = hand height) ──
+  key: C
+  scale: major
+  octave: 4
+  velocity: 100
 expression:
-  cc_number: 1            # MIDI CC number (1=Mod Wheel, 74=Cutoff, 11=Expression)
-  zone_top: 0.15          # Hand Y position for CC=127 (0.0 = top of frame)
-  zone_bottom: 0.65       # Hand Y position for CC=0
-  smoothing: 0.25         # EMA alpha (lower = smoother, 0.1-0.5)
-  dead_zone: 2.0          # Min CC change before sending (reduces jitter)
-  enabled: true           # Start with expression on/off
-
-# ── Expression CC2 (X-axis = hand horizontal position) ──
-# Left hand sits on the LEFT side of the mirrored frame (low X values).
-# Moving left hand toward center = increasing X.
-# zone_left = hand far out (CC=0), zone_right = hand near center (CC=127).
+  cc_number: 1
+  zone_top: 0.15
+  zone_bottom: 0.65
+  smoothing: 0.25
+  dead_zone: 2.0
+  enabled: true
 expression2:
-  cc_number: 74           # CC74 = Brightness/Cutoff (common for filters)
-  zone_left: 0.10         # Hand far left = CC 0
-  zone_right: 0.40        # Hand near center = CC 127
+  cc_number: 74
+  zone_left: 0.1
+  zone_right: 0.4
   smoothing: 0.3
   dead_zone: 2.0
   enabled: false
-
-# ── MIDI ──
 midi:
-  port_name: "GestureChord"  # Preferred port name (auto-detects loopBe/loopMIDI)
-  channel: 0                 # MIDI channel (0-15)
-
-# ── Performance Zone ──
+  port_name: GestureChord
+  channel: 0
 zone:
-  threshold: 0.75         # Hand must be above this Y fraction (0.0=top, 1.0=bottom)
-  hand_lost_frames: 15    # Frames before resetting filters after hand loss
-
-# ── Velocity (dynamic from hand speed) ──
+  threshold: 0.75
+  hand_lost_frames: 15
 velocity:
-  enabled: true           # true = velocity from hand speed, false = fixed velocity
-  min_velocity: 50        # Velocity for still/slow hand (0-127)
-  max_velocity: 120       # Velocity for fast hand movement (0-127)
-  speed_low: 0.003        # Normalized speed = min velocity
-  speed_high: 0.04        # Normalized speed = max velocity
-
-# ── Arpeggiator ──
+  enabled: true
+  min_velocity: 50
+  max_velocity: 120
+  speed_low: 0.003
+  speed_high: 0.04
 arpeggiator:
-  enabled: false          # Start with arp off (toggle with A key)
-  bpm: 160                # Notes per minute (40-480)
-  pattern: "up"           # up, down, up_down, random
-  octave_range: 1         # 1 = chord notes only, 2 = +1 octave
-
-# ── Rhythm (pump retrigger) ──
+  enabled: false
+  bpm: 160.0
+  pattern: up
+  octave_range: 1
 rhythm:
-  enabled: true           # Pump detection on by default
-  velocity_threshold: 0.010  # Min downward speed to detect a pump (lower = more sensitive)
-  cooldown_ms: 80         # Min ms between retriggers (80 = max 12.5 hits/sec)
-  smoothing: 0.5          # EMA alpha for velocity smoothing
-  min_velocity: 45        # MIDI velocity for gentle pumps
-  max_velocity: 120       # MIDI velocity for hard pumps
-  speed_for_max: 0.045    # Speed that maps to max velocity
-
-# ── Groove (automatic rhythm patterns) ──
+  enabled: true
+  velocity_threshold: 0.01
+  cooldown_ms: 80.0
+  smoothing: 0.5
+  min_velocity: 45
+  max_velocity: 120
+  speed_for_max: 0.045
 groove:
-  enabled: false          # Start with groove off (toggle with G key)
-  bpm: 120                # Tempo (40-300)
-  pattern: "four_floor"   # four_floor, syncopated, trap, half_time, offbeat, waltz, shuffle, sparse
-  gate_length: 0.85       # How long notes ring per hit (0.5=staccato, 0.85=legato, 1.0=fully sustained)
-  humanize_ms: 10         # Micro-timing variation in ms (0 = robotic, 15 = loose)
+  enabled: false
+  bpm: 120.0
+  pattern: four_floor
+  gate_length: 0.85
+  humanize_ms: 10.0
+chord_bank:
+  enabled: false
+  octave: 4
+  active_preset: 0
+  presets:
+    - name: "Tu Me Dejaste"
+      chords: {1: "C", 2: "Em", 3: "D", 4: "B7", 5: "Am"}
+    - name: "Pop I-V-vi-IV"
+      chords: {1: "C", 2: "G", 3: "Am", 4: "F", 5: "Em"}
+    - name: "Jazz ii-V-I"
+      chords: {1: "Dm7", 2: "G7", 3: "Cmaj7", 4: "Am7", 5: "Fmaj7"}
+    - name: "Blues"
+      chords: {1: "A7", 2: "D7", 3: "E7", 4: "Am", 5: "A"}
+    - name: "Neo Soul"
+      chords: {1: "Fmaj7", 2: "Em7", 3: "Dm7", 4: "Cmaj7", 5: "Bbmaj7"}
+    - name: "Reggaeton"
+      chords: {1: "Am", 2: "F", 3: "C", 4: "G", 5: "Em"}
+    - name: "R&B"
+      chords: {1: "Dm9", 2: "G7", 3: "Cmaj7", 4: "Am7", 5: "Fmaj7"}
+    - name: "Rock"
+      chords: {1: "G", 2: "C", 3: "D", 4: "Em", 5: "Am"}
+    - name: "Flamenco"
+      chords: {1: "Am", 2: "G", 3: "F", 4: "E7", 5: "Dm"}
+    - name: "Lofi"
+      chords: {1: "Cmaj7", 2: "Am7", 3: "Dm7", 4: "G7", 5: "Em7"}

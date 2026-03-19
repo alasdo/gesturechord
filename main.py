@@ -1,16 +1,15 @@
 """
-GestureChord v2 — Full Rhythm Suite.
+GestureChord v2 — Full Rhythm Suite + Chord Bank Presets.
 
-Rhythm modes (one active at a time):
-    Pump (R): pump hand up/down to retrigger chords manually
-    Groove (G): automatic rhythm patterns — just select chords
-    Arp (A): sequential note playback
+Chord Bank (B): map any chord to any finger, bypass scale system.
+Number keys 0-9 switch between presets when bank is active.
 
 Controls:
     ESC/Q=Quit  SPACE=Panic  D=Debug  X=Full reset
     K=Key  M=Major/Minor  S=Scale  +/-=Octave
     I=Inversion  E=Expression  V=Velocity  T=Test
     R=Rhythm(pump)  G=Groove  F=Groove pattern  A=Arp  P=Arp pattern  [/]=BPM
+    B=Toggle chord bank  0-9=Switch preset (when bank is ON)
 """
 
 import sys
@@ -30,6 +29,7 @@ from engine.velocity import VelocityController
 from engine.arpeggiator import Arpeggiator, ArpPattern
 from engine.rhythm_engine import RhythmEngine
 from engine.groove_patterns import GrooveEngine
+from engine.chord_bank import ChordBank
 from midi.midi_output import MidiOutput
 from ui.overlay import Overlay, OverlayState
 from utils.logger import setup_logger
@@ -39,7 +39,7 @@ from utils.config import load_config
 def main():
     logger = setup_logger(name="gesturechord", level=logging.INFO)
     logger.info("=" * 60)
-    logger.info("GestureChord v2 — Full Rhythm Suite")
+    logger.info("GestureChord v2 — Chord Bank Presets")
     logger.info("=" * 60)
 
     cfg = load_config()
@@ -71,14 +71,14 @@ def main():
                                 smoothing_alpha=cfg.expression.smoothing,
                                 dead_zone=cfg.expression.dead_zone,
                                 enabled=cfg.expression.enabled,
-                                invert=True)  # Y axis: high = max
+                                invert=True)
     expr2 = ExpressionController(cc_number=cfg.expression2.cc_number,
                                  zone_top=cfg.expression2.zone_left,
                                  zone_bottom=cfg.expression2.zone_right,
                                  smoothing_alpha=cfg.expression2.smoothing,
                                  dead_zone=cfg.expression2.dead_zone,
                                  enabled=cfg.expression2.enabled,
-                                 invert=False)  # X axis: right = max
+                                 invert=False)
     vel = VelocityController(min_velocity=cfg.velocity.min_velocity,
                              max_velocity=cfg.velocity.max_velocity,
                              speed_low=cfg.velocity.speed_low,
@@ -106,6 +106,11 @@ def main():
                           humanize_ms=cfg.groove.humanize_ms,
                           enabled=cfg.groove.enabled)
 
+    bank = ChordBank(presets=cfg.chord_bank.presets,
+                     octave=cfg.chord_bank.octave,
+                     active_preset=cfg.chord_bank.active_preset,
+                     enabled=cfg.chord_bank.enabled)
+
     ov = Overlay(show_debug_info=cfg.display.start_in_debug)
 
     # State
@@ -114,14 +119,9 @@ def main():
     current_chord = None
     midi_ok = False
     latency_ms = 0.0
-
-    # Cached display strings (avoid recomputing every frame)
     _cached_chord_name = ""
     _cached_roman = ""
     _cached_notes = ""
-
-    # Link mode: [0]=off (both CCs active), [1]=CC1 solo, [2]=CC2 solo
-    # Using list so it's mutable from _keys()
     link_mode = [0]
 
     # ── Init ──
@@ -139,8 +139,11 @@ def main():
     logger.info(f"Pump: {'ON' if rhythm.enabled else 'OFF'} | "
                 f"Groove: {'OFF' if not groove.enabled else groove.pattern_name + ' ' + str(int(groove.bpm)) + 'bpm'} | "
                 f"Arp: {'OFF' if not arp.enabled else arp.pattern_name}")
-    logger.info("Keys: R=Pump G=Groove F=GroovePattern A=Arp P=ArpPattern []=BPM")
-    logger.info("      K=Key M=Mode S=Scale +/-=Oct I=Inv E=CC1(Y) W=CC2(X) V=Vel D=Debug")
+    logger.info(f"Chord Bank: {'ON' if bank.enabled else 'OFF'} (B to toggle, 0-9 switch presets)")
+    logger.info(f"  {bank.preset_count} presets loaded:")
+    bank.print_all_presets(logger)
+    logger.info("Keys: B=Bank 0-9=Preset R=Pump G=Groove F=Pattern A=Arp P=ArpPattern []=BPM")
+    logger.info("      K=Key M=Mode S=Scale +/-=Oct I=Inv E=CC1 W=CC2 L=Link V=Vel D=Debug")
     _print_chords(logger, me)
 
     # ===================================================================
@@ -182,8 +185,7 @@ def main():
                 if l_lost >= cfg.zone.hand_lost_frames and not l_reset:
                     left_rec.reset(); l_reset = True
 
-            # ── Modifier + Expression (Y + X) ──
-            # link_mode: 0=both active, 1=CC1 solo, 2=CC2 solo
+            # ── Modifier + Expression ──
             mod_changed = cm.update_modifier(lc if lz else None)
             cc_val = expr.update(ly if lz else None)
             if cc_val is not None and midi_ok and link_mode[0] != 2:
@@ -196,42 +198,49 @@ def main():
             ev = sm.update(rc, rs)
             tv = vel.get_trigger_velocity() if vel.enabled else cfg.music.velocity
 
-            # ── MIDI: chord state events ──
+            # ── Helper: get notes ──
+            def _get_notes(finger_count):
+                if bank.enabled:
+                    bc = bank.get_chord(finger_count)
+                    if bc:
+                        return bc.midi_notes, bc.name, "", " ".join(bc.note_names)
+                    return None, "", "", ""
+                else:
+                    m = cm.get_chord(finger_count)
+                    if m:
+                        return m.chord_info.midi_notes, m.display_name, m.chord_info.roman_numeral, " ".join(m.chord_info.note_names)
+                    return None, "", "", ""
+
+            # ── MIDI events ──
             triggered = False
 
             if ev.event_type == EventType.CHORD_ON:
-                m = cm.get_chord(ev.finger_count)
-                if m:
+                notes, name, roman, note_str = _get_notes(ev.finger_count)
+                if notes:
                     if midi_ok:
-                        if groove.enabled:
-                            groove.set_chord(m.chord_info.midi_notes, tv)
-                        elif arp.enabled:
-                            arp.set_chord(m.chord_info.midi_notes, tv)
-                        else:
-                            midi.play_chord(m.chord_info.midi_notes, tv)
-                    current_chord = m; triggered = True
-                    _cached_chord_name = m.display_name
-                    _cached_roman = m.chord_info.roman_numeral
-                    _cached_notes = " ".join(m.chord_info.note_names)
+                        if groove.enabled: groove.set_chord(notes, tv)
+                        elif arp.enabled: arp.set_chord(notes, tv)
+                        else: midi.play_chord(notes, tv)
+                    current_chord = _ChordState(notes, name, roman, note_str)
+                    triggered = True
+                    _cached_chord_name = name; _cached_roman = roman; _cached_notes = note_str
                     latency_ms = (time.perf_counter() - t0) * 1000
-                    _log(logger, "ON", m, tv, latency_ms)
+                    logger.info(f"ON: {name} [{note_str}] v={tv}" +
+                                (f" ({latency_ms:.0f}ms)" if latency_ms else ""))
 
             elif ev.event_type == EventType.CHORD_CHANGE:
-                m = cm.get_chord(ev.finger_count)
-                if m:
+                notes, name, roman, note_str = _get_notes(ev.finger_count)
+                if notes:
                     if midi_ok:
-                        if groove.enabled:
-                            groove.set_chord(m.chord_info.midi_notes, tv)
-                        elif arp.enabled:
-                            arp.set_chord(m.chord_info.midi_notes, tv)
-                        else:
-                            midi.change_chord(m.chord_info.midi_notes, tv)
-                    current_chord = m; triggered = True
-                    _cached_chord_name = m.display_name
-                    _cached_roman = m.chord_info.roman_numeral
-                    _cached_notes = " ".join(m.chord_info.note_names)
+                        if groove.enabled: groove.set_chord(notes, tv)
+                        elif arp.enabled: arp.set_chord(notes, tv)
+                        else: midi.change_chord(notes, tv)
+                    current_chord = _ChordState(notes, name, roman, note_str)
+                    triggered = True
+                    _cached_chord_name = name; _cached_roman = roman; _cached_notes = note_str
                     latency_ms = (time.perf_counter() - t0) * 1000
-                    _log(logger, "CHANGE", m, tv, latency_ms)
+                    logger.info(f"CHANGE: {name} [{note_str}] v={tv}" +
+                                (f" ({latency_ms:.0f}ms)" if latency_ms else ""))
 
             elif ev.event_type == EventType.CHORD_OFF:
                 if midi_ok:
@@ -241,37 +250,40 @@ def main():
                 current_chord = None; rhythm.reset()
                 _cached_chord_name = ""; _cached_roman = ""; _cached_notes = ""
 
-            # Modifier re-trigger
-            if mod_changed and not triggered and sm.is_playing:
+            # Modifier re-trigger (scale mode only)
+            if not bank.enabled and mod_changed and not triggered and sm.is_playing:
                 m = cm.get_chord(sm.active_finger_count)
                 if m:
                     if midi_ok:
-                        if groove.enabled:
-                            groove.set_chord(m.chord_info.midi_notes, tv)
-                        elif arp.enabled:
-                            arp.set_chord(m.chord_info.midi_notes, tv)
-                        else:
-                            midi.change_chord(m.chord_info.midi_notes, tv)
-                    current_chord = m
+                        if groove.enabled: groove.set_chord(m.chord_info.midi_notes, tv)
+                        elif arp.enabled: arp.set_chord(m.chord_info.midi_notes, tv)
+                        else: midi.change_chord(m.chord_info.midi_notes, tv)
+                    current_chord = _ChordState(
+                        m.chord_info.midi_notes, m.display_name,
+                        m.chord_info.roman_numeral, " ".join(m.chord_info.note_names))
                     _cached_chord_name = m.display_name
                     _cached_roman = m.chord_info.roman_numeral
                     _cached_notes = " ".join(m.chord_info.note_names)
 
-            # ── Pump retrigger (only when no groove/arp) ──
+            # ── Pump retrigger ──
             pump = rhythm.update(rwy if rz else None)
             if pump and sm.is_playing and current_chord and midi_ok:
                 if not groove.enabled and not arp.enabled:
-                    midi.play_chord(current_chord.chord_info.midi_notes, pump.velocity)
+                    midi.play_chord(current_chord.midi_notes, pump.velocity)
 
             # ── Groove / Arp tick ──
-            if groove.enabled and midi_ok:
-                groove.tick()
-            elif arp.enabled and midi_ok:
-                arp.tick()
+            if groove.enabled and midi_ok: groove.tick()
+            elif arp.enabled and midi_ok: arp.tick()
 
             t3 = time.perf_counter()
 
-            # ── Overlay (uses cached strings — no string ops per frame) ──
+            # ── Overlay ──
+            # Build key_display for overlay
+            if bank.enabled:
+                key_disp = f"BANK [{bank.active_preset_index}] {bank.active_preset_name}"
+            else:
+                key_disp = me.key_display
+
             os = OverlayState(
                 tracking=tracking,
                 right_gesture=rg, left_gesture=lg,
@@ -281,9 +293,9 @@ def main():
                 notes=_cached_notes,
                 chord_state=ev.state.name,
                 confirm_progress=ev.confirmation_progress,
-                key_display=me.key_display,
-                modifier_name=cm.active_modifier_name or "triad",
-                modifier_active=cm.active_modifier != Modifier.NONE,
+                key_display=key_disp,
+                modifier_name=(cm.active_modifier_name or "triad") if not bank.enabled else "",
+                modifier_active=(cm.active_modifier != Modifier.NONE) if not bank.enabled else False,
                 inversion=cm.inversion,
                 cc_number=expr.cc_number, cc_value=expr.cc_value,
                 cc_normalized=expr.cc_normalized, cc_enabled=expr.enabled,
@@ -292,7 +304,6 @@ def main():
                 link_mode=link_mode[0],
                 fps=camera.fps, inference_ms=tracking.inference_time_ms,
                 midi_available=midi_ok, zone_threshold=cfg.zone.threshold,
-                # Rhythm features
                 rhythm_enabled=rhythm.enabled,
                 rhythm_pumping=rhythm.is_pumping,
                 groove_enabled=groove.enabled,
@@ -307,23 +318,18 @@ def main():
             )
 
             if not current_chord and rc and rc > 0 and ev.state.name in ("CONFIRMING", "CHANGING", "DETECTING"):
-                p = cm.get_chord(rc)
-                if p:
-                    os.chord_name = p.display_name
-                    os.roman = p.chord_info.roman_numeral
-                    os.notes = " ".join(p.chord_info.note_names)
+                notes, name, roman, note_str = _get_notes(rc)
+                if notes:
+                    os.chord_name = name; os.roman = roman; os.notes = note_str
 
             frame = ov.draw(frame, os)
 
             t4 = time.perf_counter()
-
-            # Debug timing (drawn after overlay, only in debug mode)
             if ov.show_debug_info:
                 h_f, w_f = frame.shape[:2]
                 total = (t4 - t0) * 1000
                 timing = f"C:{(t1-t0)*1000:.0f} T:{(t2-t1)*1000:.0f} M:{(t3-t2)*1000:.0f} O:{(t4-t3)*1000:.0f} ={total:.0f}ms"
-                if latency_ms > 0:
-                    timing += f"  LAT:{latency_ms:.0f}ms"
+                if latency_ms > 0: timing += f"  LAT:{latency_ms:.0f}ms"
                 cv2.putText(frame, timing, (8, h_f-8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 150, 150), 1, cv2.LINE_AA)
 
@@ -338,7 +344,7 @@ def main():
             key = cv2.waitKeyEx(1)
             if key == 27 or key == ord("q"): break
             _keys(key, logger, right_rec, left_rec, sm, me, cm, expr,
-                  expr2, vel, arp, rhythm, groove, midi, midi_ok, ov, link_mode)
+                  expr2, vel, arp, rhythm, groove, midi, midi_ok, ov, link_mode, bank)
 
     except KeyboardInterrupt:
         pass
@@ -349,19 +355,42 @@ def main():
         cv2.destroyAllWindows()
 
 
-def _log(logger, action, m, v=100, lat=0):
-    mod = f" [{m.modifier_name}]" if m.modifier_name else ""
-    logger.info(f"{action}: {m.display_name}{mod} [{' '.join(m.chord_info.note_names)}] v={v}"
-                + (f" ({lat:.0f}ms)" if lat else ""))
+class _ChordState:
+    def __init__(self, midi_notes, name, roman, note_str):
+        self.midi_notes = midi_notes
+        self.name = name
+        self.roman = roman
+        self.note_str = note_str
 
 
-def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov, lm):
+def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov, lm, bank):
     if key == ord(" "):
         sm.reset(); cm.reset(); ex.reset(); ex2.reset(); vel.reset()
         arp.stop(); rhy.reset(); grv.stop()
-        lm[0] = 0  # Exit link mode on panic
+        lm[0] = 0
         if mo: mi.panic()
         log.info("PANIC")
+    elif key == ord("b"):
+        bank.enabled = not bank.enabled
+        sm.reset()
+        if mo: mi.stop_chord()
+        if bank.enabled:
+            log.info("CHORD BANK ON:")
+            bank.print_bank(log)
+            log.info("  Press 0-9 to switch presets")
+        else:
+            log.info("CHORD BANK OFF — scale mode")
+            _print_chords(log, me)
+    # Number keys 0-9 switch presets when bank is active
+    elif key in range(ord("0"), ord("9") + 1) and bank.enabled:
+        idx = key - ord("0")
+        if bank.switch_preset(idx):
+            sm.reset()
+            if mo: mi.stop_chord()
+            log.info(f"Preset switched to [{idx}]:")
+            bank.print_bank(log)
+        else:
+            log.info(f"No preset at index {idx} (have {bank.preset_count})")
     elif key == ord("x"):
         rr.reset(); lr.reset(); sm.reset(); cm.reset(); ex.reset(); ex2.reset()
         vel.reset(); arp.stop(); rhy.reset(); grv.stop()
@@ -374,20 +403,21 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov,
     elif key == ord("g"):
         grv.enabled = not grv.enabled
         if grv.enabled:
-            # Disable arp when groove is on
             if arp.enabled: arp.enabled = False; arp.stop()
             log.info(f"Groove ON: {grv.pattern_name} {grv.bpm:.0f}bpm")
-            # Start playing if a chord is already held
             if sm.is_playing and mo:
-                m = cm.get_chord(sm.active_finger_count)
-                if m: grv.set_chord(m.chord_info.midi_notes, vel.velocity)
+                if bank.enabled:
+                    bc = bank.get_chord(sm.active_finger_count)
+                    if bc: grv.set_chord(bc.midi_notes, vel.velocity)
+                else:
+                    m = cm.get_chord(sm.active_finger_count)
+                    if m: grv.set_chord(m.chord_info.midi_notes, vel.velocity)
         else:
             grv.stop()
             if mo: mi.stop_chord()
             log.info("Groove OFF")
     elif key == ord("f"):
-        name = grv.cycle_pattern()
-        log.info(f"Groove pattern: {name}")
+        log.info(f"Groove pattern: {grv.cycle_pattern()}")
     elif key == ord("a"):
         arp.enabled = not arp.enabled
         if arp.enabled:
@@ -401,15 +431,11 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov,
         arp.cycle_pattern()
         log.info(f"Arp pattern: {arp.pattern_name}")
     elif key == ord("["):
-        if grv.enabled:
-            log.info(f"Groove BPM: {grv.adjust_bpm(-10):.0f}")
-        else:
-            log.info(f"Arp BPM: {arp.adjust_bpm(-20):.0f}")
+        if grv.enabled: log.info(f"Groove BPM: {grv.adjust_bpm(-10):.0f}")
+        else: log.info(f"Arp BPM: {arp.adjust_bpm(-20):.0f}")
     elif key == ord("]"):
-        if grv.enabled:
-            log.info(f"Groove BPM: {grv.adjust_bpm(10):.0f}")
-        else:
-            log.info(f"Arp BPM: {arp.adjust_bpm(20):.0f}")
+        if grv.enabled: log.info(f"Groove BPM: {grv.adjust_bpm(10):.0f}")
+        else: log.info(f"Arp BPM: {arp.adjust_bpm(20):.0f}")
     elif key == ord("d"):
         ov.show_debug_info = not ov.show_debug_info
     elif key == ord("e"):
@@ -419,17 +445,10 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov,
         ex2.enabled = not ex2.enabled
         log.info(f"Expression2 CC{ex2.cc_number} (X-axis): {'ON' if ex2.enabled else 'OFF'}")
     elif key == ord("l"):
-        # Link mode: cycles 0 → 1 → 2 → 0
-        # 0 = normal (both CCs active)
-        # 1 = CC1 solo (CC2 muted — link CC1 safely)
-        # 2 = CC2 solo (CC1 muted — link CC2 safely)
         lm[0] = (lm[0] + 1) % 3
-        if lm[0] == 0:
-            log.info("LINK MODE OFF — both CC1 + CC2 active")
-        elif lm[0] == 1:
-            log.info(f"LINK MODE: CC{ex.cc_number} SOLO (CC{ex2.cc_number} muted) — link CC1 now")
-        elif lm[0] == 2:
-            log.info(f"LINK MODE: CC{ex2.cc_number} SOLO (CC{ex.cc_number} muted) — link CC2 now")
+        if lm[0] == 0: log.info("LINK MODE OFF — both CC1 + CC2 active")
+        elif lm[0] == 1: log.info(f"LINK MODE: CC{ex.cc_number} SOLO")
+        elif lm[0] == 2: log.info(f"LINK MODE: CC{ex2.cc_number} SOLO")
     elif key == ord("v"):
         vel.enabled = not vel.enabled
         log.info(f"Velocity: {'ON' if vel.enabled else 'OFF'}")
@@ -459,11 +478,15 @@ def _keys(key, log, rr, lr, sm, me, cm, ex, ex2, vel, arp, rhy, grv, mi, mo, ov,
     elif key in (2490368, ord("="), ord("+")):
         sm.reset()
         if mo: mi.stop_chord()
-        me.set_octave(me.octave + 1); log.info(f"Octave UP: {me.octave}")
+        me.set_octave(me.octave + 1)
+        if bank.enabled: bank.set_octave(me.octave)
+        log.info(f"Octave UP: {me.octave}")
     elif key in (2621440, ord("-"), ord("_")):
         sm.reset()
         if mo: mi.stop_chord()
-        me.set_octave(me.octave - 1); log.info(f"Octave DOWN: {me.octave}")
+        me.set_octave(me.octave - 1)
+        if bank.enabled: bank.set_octave(me.octave)
+        log.info(f"Octave DOWN: {me.octave}")
 
 
 def _print_chords(log, me):
