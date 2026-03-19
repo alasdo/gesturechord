@@ -65,6 +65,22 @@ Move hand up/down to control any FL Studio parameter (filter, reverb, delay, etc
 
 Move hand left/right to control a second parameter via MIDI CC74. Both CC channels work simultaneously.
 
+### Chord Bank — Custom Chord Presets
+
+Press **B** to enter Chord Bank mode. This bypasses the scale system entirely and maps any chord to any finger — perfect for non-diatonic progressions.
+
+Press **0-9** to switch between presets instantly during performance.
+
+Example presets (defined in config.yaml):
+
+| Preset | 1 | 2 | 3 | 4 | 5 |
+|--------|---|---|---|---|---|
+| Tu Me Dejaste | C | Em | D | B7 | Am |
+| Pop I-V-vi-IV | C | G | Am | F | Em |
+| Jazz ii-V-I | Dm7 | G7 | Cmaj7 | Am7 | Fmaj7 |
+
+Supported chord formats: C, Cm, Cdim, Caug, C7, Cm7, Cmaj7, Cdim7, C9, Cm9, Cmaj9, Csus2, Csus4, C6, Cm6, C#, Db, F#m, Bbmaj7, and more.
+
 ### Rhythm System
 
 Three rhythm modes (one active at a time):
@@ -80,7 +96,8 @@ Three rhythm modes (one active at a time):
 - **16 scales** — major, minor, all modes, pentatonic, blues, exotic
 - **Inversions** — root, 1st, 2nd inversion (I key)
 - **Dynamic velocity** — hand speed controls volume (V key)
-- **Humanized voicing** — micro-stagger timing + velocity variation
+- **Humanized voicing** — velocity variation per note
+- **Link mode** — solo CC1 or CC2 during MIDI learn to prevent cross-linking (L key)
 - **Configurable** — all parameters in config.yaml
 - **Low latency** — pipeline optimized for ~25-35ms response
 
@@ -106,11 +123,18 @@ Three rhythm modes (one active at a time):
 | + / - | Octave up / down |
 | I | Cycle inversion (root → 1st → 2nd) |
 
+### Chord Bank
+| Key | Action |
+|-----|--------|
+| B | Toggle chord bank on/off |
+| 0-9 | Switch preset (when bank is ON) |
+
 ### Expression
 | Key | Action |
 |-----|--------|
 | E | Toggle CC1 (hand height → Mod Wheel) |
 | W | Toggle CC2 (hand X position → CC74) |
+| L | Cycle link mode: both → CC1 solo → CC2 solo |
 | V | Toggle dynamic velocity |
 
 ### Rhythm
@@ -191,6 +215,16 @@ python main.py
 
 This works with Splice, Serum, Vital, and any third-party plugin.
 
+### Linking two effects safely (Link Mode)
+
+When linking CC1 and CC2 to separate knobs, use Link Mode to prevent FL Studio from grabbing the wrong CC:
+
+1. Press **L** → CC1 SOLO (CC2 is muted)
+2. Ctrl+J in FL Studio, wiggle knob, move hand up/down → links to CC1
+3. Press **L** again → CC2 SOLO (CC1 is muted)
+4. Ctrl+J, wiggle second knob, move hand left/right → links to CC2
+5. Press **L** again → both active for performance
+
 ---
 
 ## Configuration
@@ -213,6 +247,26 @@ All settings live in `config.yaml`. Delete it to regenerate defaults.
 | `groove.humanize_ms` | Timing variation | 10 |
 | `arpeggiator.bpm` | Arp speed | 160 |
 
+### Chord Bank Presets
+
+Define up to 10 custom chord banks in config.yaml:
+
+```yaml
+chord_bank:
+  enabled: false
+  octave: 4
+  active_preset: 0
+  presets:
+    - name: "Tu Me Dejaste"
+      chords: {1: "C", 2: "Em", 3: "D", 4: "B7", 5: "Am"}
+    - name: "Pop I-V-vi-IV"
+      chords: {1: "C", 2: "G", 3: "Am", 4: "F", 5: "Em"}
+    - name: "Jazz ii-V-I"
+      chords: {1: "Dm7", 2: "G7", 3: "Cmaj7", 4: "Am7", 5: "Fmaj7"}
+```
+
+Add as many presets as you need (keys 0-9). Use any chord name — the parser handles sharps, flats, and all standard qualities.
+
 ---
 
 ## Architecture
@@ -232,6 +286,7 @@ gesturechord/
 │   ├── state_machine.py         # Settle-then-confirm debouncing
 │   ├── music_theory.py          # 16 scales, chords, intervals
 │   ├── chord_mapper.py          # Right degree + left modifier + shift
+│   ├── chord_bank.py            # Custom chord presets (any chord, any finger)
 │   ├── expression.py            # Hand position → smoothed MIDI CC
 │   ├── velocity.py              # Hand speed → MIDI velocity
 │   ├── arpeggiator.py           # Sequential note playback
@@ -281,6 +336,9 @@ MIDI fires BEFORE overlay rendering for minimum latency.
 
 **Third-party plugin CC not linking:**
 - Use **Ctrl+J** (Multilink) instead of right-click "Link to controller"
+
+**Both CC channels linking to same knob:**
+- Use **Link Mode** (L key) to solo one CC at a time during MIDI learn
 
 **FPS too low:**
 - Close other apps using the webcam
