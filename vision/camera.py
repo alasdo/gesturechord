@@ -203,9 +203,9 @@ class Camera:
             logger.warning("Failed to read frame from camera")
             return None
 
-        # Mirror for natural webcam interaction
+        # Mirror for natural webcam interaction (numpy flip is faster than cv2.flip)
         if self.mirror:
-            frame = cv2.flip(frame, 1)
+            frame = frame[:, ::-1]
 
         # Update FPS counter
         self._frame_count += 1
